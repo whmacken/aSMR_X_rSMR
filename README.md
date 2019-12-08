@@ -1,2 +1,2 @@
-# aSMR-x-rSMR
+# aSMR_X_rSMR
 Script for building and testing BGC specific rSMR actual soil moisture regimes from Climate data and vegetation indicators
