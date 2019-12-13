@@ -103,6 +103,7 @@ for (i in 1:4){
 colnames(CMD)[6:9] <- c("rSMR3","rSMR2","rSMR1","rSMR0")
 
 CMD <- CMD[,order(colnames(CMD))]## creates full grid of CMD values by BGC by rSMR class
+write.csv (CMD, "./outputs/CMD_by_rSMR.csv")
 ```
 ## Range of Climatic Moisture Deficit for Expert Assigned aSMR Class  of Zonal Sites
 The development of a seamless climate surface for British Columnbia with Climatic Moisture Deficit presented an opportunity for linking aSMR as defined by AET/PET ratio to the climate moisture deficit. Since the zonal site is thought to best reflect climatic conditions a comparison of the CMD range reprenting each of the aSMR classes as defined in the 1990 expert grid was used to define some initial CMD ranges that represent each class. Errors in aSMR assignment and in the Climate Surface are both likley but in aggregate believed to be generally accurate.
@@ -171,16 +172,18 @@ test <- test %>% dmap(as.factor)
 
 aSMR_rSMR <- cbind(CMD[1], test)
 colnames(aSMR_rSMR) <- c("BGC", "rSMR0", "rSMR1", "rSMR2", "rSMR3", "rSMR4", "rSMR5", "rSMR6", "rSMR7")
+save(aSMR_rSMR,file = "./outputs/rSMR_aSMR_ModelGrid.RData")
+write.csv(aSMR_rSMR, file= "./outputs/modelled_WNAv11_rSMR_aSMR_grid_HalfStep.csv", row.names = FALSE)
+
 aSMR_rSMR.long <- melt(aSMR_rSMR, id.vars= c("BGC"), variable_name = "rSMR", value.name = "aSMRC")
 colnames(aSMR_rSMR.long) <- c("BGC", "rSMR", "aSMRC")
-write.csv(aSMR_rSMR, file= "./outputs/modelled_WNAv11_rSMR_aSMR_grid_HalfStep.csv", row.names = FALSE)
-#colnames(test) <- colnames(CMD)
+save(aSMR_rSMR.long,file = "./outputs/rSMR_aSMR_CalcList.RData")
 SMRwide <- cbind(CMD, test)
 SMRwide$BGC <- gsub("[[:space:]]","",SMRwide$BGC)
 
-SMRCross <- melt(SMRwide) ###aSMR lookup
-colnames(SMRCross) <- c("BGC", "rSMR", "aSMRC")
-save(SMRCross,file = "./outputs/rSMR_aSMR_Model_long.RData")
+#SMRCross <- melt(SMRwide) ###aSMR lookup
+#colnames(SMRCross) <- c("BGC", "rSMR", "aSMRC")
+
 #load ("rSMR_aSMR_CalcList.RData")
 ```
 
@@ -229,7 +232,6 @@ dr <- ggplot(aSMRdiff, aes(diff))+
 plot(dr)
 ggsave("./outputs/aSMR difference expert_climate by rSMR.pdf", plot = dr, dpi = "print", device = "pdf", width = 15, height = 15, units = "in")
 # dev.off() 
-# save(SMRCross,file = "rSMR_aSMR_Both.RData")
 
 ```
 ### Difference between modelled aSMR and the Expert crosswalk by BGC
@@ -251,7 +253,7 @@ ggsave("./outputs/aSMR difference expert_climate by BGC.pdf", plot = db, dpi = "
 ## Calculate the estimated aSMR value of tree species in the BECMaster
 ```{r species indicator value of aSMR, echo=FALSE, message = FALSE}  
   ####Create Plots BGC & edatopic position data frame
-  load("rSMR_aSMR_Both.RData")
+  load("./outputs/rSMR_aSMR_CalcList.RData") # load a saved aSMRxrSMR list
     load("./inputs/VegDat_Clean.RData")
  PlotCount <- count (vegData, c("PlotNumber"))
  #PlotCount2 <- aggregate(Species ~ PlotNumber, vegData, length)
@@ -264,57 +266,62 @@ ggsave("./outputs/aSMR difference expert_climate by BGC.pdf", plot = db, dpi = "
   #---------Option for Trees only
   #  vegData <- vegData[vegData$Type %in% c(1,2),]
   #--------------------------
-  BGCLookup <- read.csv("./inputs/BGCLookup.csv", stringsAsFactors = FALSE)
+  BGCLookup <- read.csv("./inputs/BGCLookup.csv", stringsAsFactors = FALSE) ## check is this BGC overlayed by spatial location?
   BGCLookup <- BGCLookup[,c(3,12)]
   colnames(BGCLookup)[1] <- "PlotNumber"
   
   ##import edatopic data
   plotEnv <- read.csv("./inputs/KiriEnvDat.csv", stringsAsFactors = FALSE)# generated from Vpro BECMaster plot|BGC|SMR|SNR
-  plotEnv <- plotEnv[plotEnv$NutrientRegime %in% c("A","B","C","D","E"),]
-  plotEnv <- plotEnv[plotEnv$MoistureRegime %in% c(0,1,2,3,4,5,6,7,8),]
-  plotEnv <- plotEnv[,-2]
+  plotEnv <- plotEnv[plotEnv$NutrientRegime %in% c("A","B","C","D","E"),] ## removes plots with non-conforming full classes
+  plotEnv <- plotEnv[plotEnv$MoistureRegime %in% c(0,1,2,3,4,5,6,7,8),] ## removes plots with non-conforming full classes
+  plotEnv <- plotEnv[,-2] #removed BGC to be added from BGCLookup
   plotEnv <- merge(plotEnv,BGCLookup, by = "PlotNumber", all.x = TRUE)
   plotEnv <- plotEnv[plotEnv$BGC_LABEL != "",]
   plotEnv <- plotEnv[plotEnv$BGC_LABEL != " ",]
-  plotEnv$BGC_noSpace <- gsub("[[:space:]]","",plotEnv$BGC_LABEL)
+  plotEnv$BGC <- gsub("[[:space:]]","",plotEnv$BGC_LABEL)
   plotEnv$BGC_Zone <- substring(plotEnv$BGC_LABEL, 1, 4)
   colnames (plotEnv) [2] <- "rSMR"
-###load the aSMR to rSMR crosswalk
-load( "./inputs/rSMR_aSMR_Both.RData")
-colnames(rSMR_exp_calc)[1] <- "BGC_noSpace"
-rSMR_exp_calc$rSMR <- gsub("rSMR", "", rSMR_exp_calc$rSMR)
+###load the aSMR to rSMR crosswalk in long format
+#load( "./inputs/rSMR_aSMR_Both.RData")
+colnames(aSMR_rSMR)[1] <- "BGC"
+aSMR_rSMR.long$rSMR <- gsub("rSMR", "", aSMR_rSMR.long$rSMR) ## removes the rSMR prefix from the rSMR crosswalk
 #rSMR_exp_calc[1:4] <- lapply(rSMR_exp_calc, factor)
 #    SMRCross$rSMR <- gsub("rSMR", "", SMRCross$rSMR)
 # colnames(SMRCross) [1:3] <- c("BGC_noSpace", "rSMR", "aSMR")
-Env2 <- merge(plotEnv, rSMR_exp_calc, by = c("BGC_noSpace", "rSMR"),  all.x = TRUE)
-plotEnv2 <- Env2[, c(3,1,5,6,2,7,8)] # colnames(plotEnv)[4] <- "Unit"
+Env2 <- merge(plotEnv, aSMR_rSMR.long, by = c("BGC", "rSMR"),  all.x = TRUE)
+plotEnv2 <- Env2 %>% select (PlotNumber, BGC_Zone, BGC, rSMR, aSMRC, NutrientRegime)
  #   modBGC <- read.csv("ModelledBGC.csv", stringsAsFactors = FALSE)
 ##Count the number of plots in each aSMR category
 aSMRCount <- count (plotEnv2, c("aSMRC")) #count of species occurrences by modelled aSMR 1/2 step
-    save(plotEnv2,file = "PlotEnv.RData")
-    load( "PlotEnv.RData")
+    save(plotEnv2,file = "./outputs/PlotEnv.RData")
+    #load( "PlotEnv.RData")
   ############Add BGC and aSMR info to vegetation list data
 Veg_Env <- merge(vegData, plotEnv2, by = "PlotNumber", all.x = TRUE)
 Veg_Env <- Veg_Env[!is.na(Veg_Env$aSMRC),]
-Veg_Env <- Veg_Env[Veg_Env$BGC_LABEL != "",]
+Veg_Env <- Veg_Env[Veg_Env$BGC != "",]
 #Veg_Env$aSMR <- as.factor(Veg_Env$aSMRC)
 #Veg_Env2 <- group_by(Veg_Env, Species, aSMR)
 Veg_Env3 <- plyr::count (Veg_Env, c("Species", "aSMRC")) #count of species occurrences by modelled aSMR 1/2 step
 Veg_Env4 <- aggregate(Cover ~ Species + aSMRC, Veg_Env, sum) #sum of covers of species occurrences by modelled aSMR 1/2 step
-#Veg_Env3 <- table (Veg_Env, c("Species", "aSMR"), show_na = FALSE)
+Veg_Env5 <- left_join(Veg_Env3, Veg_Env4)
+Veg_Env5$CovMean <- (Veg_Env5$Cover/Veg_Env5$freq) * sqrt(Veg_Env5$freq)
 ############summarize species occurrences by aSMR category for determining indicator values
 Spp_aSMR <- cast(Veg_Env3, Species ~ aSMRC) #ignore message here casts to matrix
-Spp_aSMRcov <- cast(Veg_Env4, Species ~ aSMRC) #ignore message here casts to matrix
+#Spp_aSMRcov <- cast(Veg_Env4, Species ~ aSMRC) #ignore message here casts to matrix
+Spp_aSMRcov <- cast(Veg_Env4, Species ~ aSMRC) 
+Spp_aSMRcovmean <- cast(Veg_Env5[-c(3:4)], Species ~ aSMRC) 
 
-write.csv(Spp_aSMR, file= "Species_by_aSMR_grid_halfstep.csv")
-write.csv(Spp_aSMRcov, file= "Speciescover_by_aSMR_grid_halfstep.csv")
+write.csv(Spp_aSMR, file= "./outputs/Speciescount_by_aSMR_grid_halfstep.csv")
+write.csv(Spp_aSMRcov, file= "./outputs/Speciescover_by_aSMR_grid_halfstep.csv")
+write.csv(Spp_aSMRcovmean, file= "./outputs/Speciesmeancover_by_aSMR_grid_halfstep.csv")
 
 #### build some summaries to look at species distribution by calculated aSMR
 ###Start Kiri##############################
 ####calculate percent
-Spp_CountPerc <- Spp_aSMR[,colnames(Spp_aSMR) != "NA"] ##remove NA
-Spp_CountPerc$Total <- rowSums(Spp_CountPerc[,-1])
-Spp_CountPerc[,!colnames(Spp_CountPerc) %in% c("Species","Total")] <- (Spp_CountPerc[,!colnames(Spp_CountPerc) %in% c("Species","Total")]/Spp_CountPerc$Total)*100
+Spp_CountPerc <- Spp_aSMR
+Spp_CountPerc[is.na(Spp_CountPerc)] <- 0 ####fill NA with 0
+#Spp_CountPerc$Total <- rowSums(Spp_CountPerc[,-1])
+#Spp_CountPerc[,!colnames(Spp_CountPerc) %in% c("Species","Total")] <- (Spp_CountPerc[,!colnames(Spp_CountPerc) %in% c("Species","Total")]/Spp_CountPerc$Total)*100
 
 ###Now for %cover
 Spp_aSMRcov[is.na(Spp_aSMRcov)] <- 0 ####fill NA with 0
@@ -362,14 +369,17 @@ stats <- foreach(Spp = SppList, .combine = rbind) %do% {
   out
 }
 
-write.csv(stats, "Species_aSMR_Statistics.csv")
+write.csv(stats, "./outputs/Species_aSMR_Statistics.csv")
 ```
 ### Bar graphs of species abundance by aSMR class for BEC data
 ```{r build species abundance bargraphs by aSMR, echo=FALSE, message = FALSE, fig.width=12,fig.height=11,fig.cap="\\label{fig:figs} Ratio Species Cover across Modelled aSMR classes" }
 ###Build Graphics
 choices <- as.character(tempCount$Species[rowSums(tempCount[,-1]) > 200]) ###only allow selection of species with certain abundance cutoff
 #Spp <- select.list(choices, graphics = TRUE, multiple = TRUE) ###Select which species to plot (can choose multiple)
-Spp <- c("ABIEAMA", "ABIEGRA","ABIELAS", "CHAMNOO", "JUNISCO", "LARIOCC", "PINUCON", "PINUMON", "PINUPON","PICEENE", "PICEMAR",  "PICESIT","PSEUMEN", "THUJPLI","TSUGHET", "TSUGMER")
+Spp <- c("ABIEAMA", "ABIEGRA","ABIELAS", "XANTNOO", "JUNISCO", "LARILAR", "LARILYA", "LARIOCC", 
+         "PINUALB", "PINUCON", "PINUMON", "PINUPON","PICEENE", "PICEMAR",  "PICESIT","PSEUMEN", 
+         "THUJPLI","TSUGHET", "TSUGMER", 
+         "ACERMAC", "ALNURUB", "ARBUMEN", "BETUPAP",  "POPUTRE",  "POPUTRI", "QUERGAR1" )
 #Spp <- c("PETAFRI", "MAIADIL","OPLOHOR")#Moist5
 #Spp <- c("LYSIAME", "MENYTRI",  "SPHAFUS")
 temp <- ""
@@ -387,15 +397,48 @@ multSpp <- melt(temp_pc, id.vars = "aSMR")###Create data set for doing multiple 
 
 colnames(multSpp)[2:3] <- c("Spp","Total")
 multSpp$Spp <- as.factor(multSpp$Spp)
-####Create bar plot of cover by aSMR  for single species
-# ggplot(temp, aes(x = aSMR, y = Total))+
-#   geom_bar(position = "dodge", stat = "identity")+
-#   
- # labs(y = "Cover", title = paste(Spp, collapse = ", "))
 
 plotsmr <- ggplot(multSpp, aes(x = aSMR, y = Total)) +
   geom_bar(position = "dodge", stat = "identity")+
-  facet_wrap(~ Spp, ncol = 3)+
+  facet_wrap(~ Spp, ncol = 4)+
+  geom_vline (xintercept = 11, colour = "green") +
+  xlab ("Modelled aSMR Class")+
+  ylab ("Ratio of Cover")
+
+plot(plotsmr)
+
+
+```
+### Bar graphs of species mean abundance by aSMR class for BEC data
+```{r build species abundance bargraphs by aSMR, echo=FALSE, message = FALSE, fig.width=12,fig.height=11,fig.cap="\\label{fig:figs} Ratio Species Cover across Modelled aSMR classes" }
+###Build Graphics
+choices <- as.character(tempCount$Species[rowSums(tempCount[,-1]) > 200]) ###only allow selection of species with certain abundance cutoff
+#Spp <- select.list(choices, graphics = TRUE, multiple = TRUE) ###Select which species to plot (can choose multiple)
+Spp <- c("ABIEAMA", "ABIEGRA","ABIELAS", "XANTNOO", "JUNISCO", "LARILAR", "LARILYA", "LARIOCC", 
+         "PINUALB", "PINUCON", "PINUMON", "PINUPON","PICEENE", "PICEMAR",  "PICESIT","PSEUMEN", 
+         "THUJPLI","TSUGHET", "TSUGMER", 
+         "ACERMAC", "ALNURUB", "ARBUMEN", "BETUPAP",  "POPUTRE",  "POPUTRI", "QUERGAR1" )
+#Spp <- c("PETAFRI", "MAIADIL","OPLOHOR")#Moist5
+#Spp <- c("LYSIAME", "MENYTRI",  "SPHAFUS")
+temp <- ""
+temp <- as.data.frame(Spp_aSMRcovmean[Spp_aSMRcovmean$Species %in% Spp,])##subset for selected species
+rownames(temp) <- temp$Species
+temp_pc <- temp# %>% adorn_percentages(denominator = "row")
+temp_pc <- temp_pc[,-1]
+temp_pc <- as.data.frame(t(temp_pc))
+temp_pc$aSMR <- rownames(temp_pc)
+
+multSpp <- melt(temp_pc, id.vars = "aSMR")###Create data set for doing multiple curves at once
+
+#colnames (temp) [1] <- "Total"
+#temp$Total <- rowSums(temp[,-length(temp)]) ###Sum together if multiple species selected
+
+colnames(multSpp)[2:3] <- c("Spp","Total")
+multSpp$Spp <- as.factor(multSpp$Spp)
+
+plotsmr <- ggplot(multSpp, aes(x = aSMR, y = Total)) +
+  geom_bar(position = "dodge", stat = "identity")+
+  facet_wrap(~ Spp, ncol = 4)+
   geom_vline (xintercept = 11, colour = "green") +
   xlab ("Modelled aSMR Class")+
   ylab ("Ratio of Cover")
@@ -405,6 +448,42 @@ plot(plotsmr)
 
 ```
 
+### Bar graphs of species presence by aSMR class for BEC data
+```{r build species presence bargraphs by aSMR, echo=FALSE, message = FALSE, fig.width=12,fig.height=11,fig.cap="\\label{fig:figs} Ratio Species Cover across Modelled aSMR classes" }
+temp2 <- ""
+Spp_CountPerc$Species <- as.character(Spp_CountPerc$Species)
+temp2 <- as.data.frame(Spp_CountPerc[Spp_CountPerc$Species %in% Spp,])##subset for selected species
+rownames(temp2) <- temp2$Species
+temp_pp <- temp2#  %>% select(-Total) #%>% drop_na()
+#temp_pp <- temp2 %>% adorn_percentages(denominator = "row")
+temp_pp <- temp_pp[,-1]
+temp_pp <- as.data.frame(t(temp_pp))
+temp_pp$aSMR <- rownames(temp_pp)
+
+multSpp2 <- melt(temp_pp, id.vars = "aSMR")###Create data set for doing multiple curves at once
+
+#colnames (temp) [1] <- "Total"
+#temp$Total <- rowSums(temp[,-length(temp)]) ###Sum together if multiple species selected
+
+colnames(multSpp2)[2:3] <- c("Spp","Total")
+multSpp2$Spp <- as.factor(multSpp2$Spp)
+####Create bar plot of cover by aSMR  for single species
+# ggplot(temp, aes(x = aSMR, y = Total))+
+#   geom_bar(position = "dodge", stat = "identity")+
+#   
+ # labs(y = "Cover", title = paste(Spp, collapse = ", "))
+
+plotcnt <- ggplot(multSpp2, aes(x = aSMR, y = Total)) +
+  geom_bar(position = "dodge", stat = "identity")+
+  facet_wrap(~ Spp, ncol = 3)+
+  geom_vline (xintercept = 11, colour = "green") +
+  xlab ("Modelled aSMR Class")+
+  ylab ("Ratio of Cover")
+
+plot(plotcnt)
+
+
+```
 
 ```{r build species abundance curves by aSMR, echo=FALSE, message = FALSE}
 
