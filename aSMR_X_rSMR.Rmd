@@ -69,7 +69,7 @@ allDat2$PPT.dorm <- allDat2$PPT_at + allDat2$PPT_wt
 
 # ##--------BGCs requiring special adjustments for deep snowpack
     BGC_Special <- fread("./inputs/BGC_Special.csv", data.table = FALSE)
-    CMD <- full_join(CMD,BGC_Special, by.x = "ID2")
+    CMD <- full_join(CMD,BGC_Special, by = c("ID2" = "BGC"))
 
   ####To adjust in zones with prolonged snowpack remove CMD from early growing season months
     CMD$CMDsnow <- ifelse(CMD$Special == "snow", CMD$CMD07+CMD$CMD08+CMD$CMD09,
@@ -138,7 +138,7 @@ This adjustment factor was made heuristically to most closely match the expert g
 Import a table of range rules for all rSMR classes to identify either aSMR full steps or 1/2 steps.
 ```{r convert CMD ranges to aSMR classes, echo=FALSE, message = FALSE, warning=FALSE}
 #rules <- read.csv("aSMR_Rules_FullStep.csv") ### import rules on range of CMD which equates to aSMR
-rules <- read.csv("./inputs/aSMR_Rules_HalfStep_v11_09Dec2019.csv") ### import rules on range of CMD which equates to aSMR
+rules <- read.csv("./inputs/aSMR_Rules_HalfStep_v12_30Dec2021.csv") ### import rules on range of CMD which equates to aSMR
 aSMRClass <- function(x){
   for(i in 1:length(ruleSelect$CMD)){
     if(x < ruleSelect$CMD[i+1]){
