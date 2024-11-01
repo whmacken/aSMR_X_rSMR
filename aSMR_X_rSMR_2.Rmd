@@ -1,0 +1,700 @@
+---
+title: "Modelling Actual Soil Moisture Regime from Climate Moisture Deficit"
+subtitle: "Coast Region: LMH77"
+author: "William H MacKenzie"
+date: "08/12/2019"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+require(tcltk)
+require(foreach)
+require(ggplot2)
+require (plyr)
+require(dplyr) ## this package may cause issues with count function of plyr
+require(magrittr)
+require(data.table)
+require (reshape)
+require(reshape2)
+require(gridExtra)
+require(mgcv)
+require(rgl)
+require(deldir)
+require(stringr)
+require(janitor)
+require(modeest)
+require(expss)
+require(tidyr)
+require (purrr)
+require (purrrlyr)
+source("_3Dbarplot_Function.R")
+```
+
+## Introduction
+The biogeoclimatic ecosystem classification (BEC) system uses relative soil moisture and nutrient regime to frame environmental differences between site series within an area of similar regional climate (biogeoclimatic subzone/variants).  Relative soil moisture regime classes are defined from site and soils characteristics into nine classes representing an ordinal ranking of site conditions from the driest site conditions (very xeric: rSMR 0) to the wettest terrestrial conditions on the landscape (hydric: rSMR 8). The assessment of rSMR is independant of the regional climate: the site conditions descibing xeric site is the same in all biogeoclimatic units (BGCs). This feature allows ecological characteristics of different BGCs to be compared aligning similar site and soils conditions. The site and soils conditions describing mesic relative soil moistures (rSMR 4) (and mesotrophic nutrient status) are considered to be those sites that best reflect regional climatic conditions and are said to be the zonal site. The ecosystem that occupies this relative postion in a BGC is considered the zonal ecosystem and the vegetation composition differences between different zonal ecosystems used to define a hierarchy of bioclimatic similarity.
+However, for some purposes such as defining the water balance relationships for a species, quantifying the actual soil moisture is required.
+Direct quantitaive measurement of ecologically important soil moisture requires multi-year and multidepth measurements to be effective. There have been technological challenges to undertaking this long-term research and has been implemented infrequently in British Columbia. The high diversity of climatic and site conditions in the province means that quantitive measurement across a representative set of environmental and ecosystem conditions is untenable.  In response to this, Klinka (1989;2000) proposed a classification system for defining actual soil moisture regime based broader approximations on the ratio of actual to potential evaporation and the number of months in deficit. {insert table}
+
+Regional Ecologists created a rSMR x aSMR grid for all mapped BGCs in 1990 using Klinka's first approximation (1989). This matrix was built primarily interpretation of the actual soil moisture indicator status of the plant species occurring on each rSMR position. Some variation in the interpretation of this plant community - soil moisture relationship between experts and regions occurred and it represented only 129 of the 216 currently recognized biogeoclimatic units. 
+This script represents a process to both complete the rSMR x aSMR matrix for contemporary BGCs and provide a objective comparison between expert assigned aSMR ranking using both a climate model approach and a species indicator approach. 
+
+```{r import tables, echo=FALSE, message = FALSE}
+###Climate data 1961-90for representative points per BGC  with all variables# allDat <- fread("./inputs/ALLBGC_AllVars.csv", data.table = FALSE, stringsAsFactors = FALSE)
+allDat <- fread("./inputs/climr_coastv13_2_5kmgrid.csv", data.table = FALSE, stringsAsFactors = FALSE)
+allDat <- allDat %>% filter(grepl('^CWH|^CDF|MH|IDFww|CMA', BGC)) 
+
+# allDat <- fread("./inputs/climr_WNAv12_5kmgrid.csv", data.table = FALSE, stringsAsFactors = FALSE)
+
+
+CMDtemp <- allDat[,grep("CMD",colnames(allDat))]
+AllBGC <- unique(allDat$BGC)
+#write.csv(AllBGC, "./inputs/AllmodelledBGCs.csv")
+# ###work on checking for excess summer precip in all month leading to Moist aSMR zonal sites
+#temp2 <- allDat[,grep("PPT0", colnames(allDat))]
+sPPTtemp <- allDat[c("zone", "BGC", "PPT_05","PPT_06","PPT_07","PPT_08","PPT_09" )]
+sPPTtemp$Moist <- rowSums(sPPTtemp[,3:7] >90) #count of months with >90mm rain
+temp3 <- sPPTtemp %>% select(BGC,Moist) %>% group_by (BGC) %>% summarize (count= length(BGC), moistcount = length(BGC[Moist == 5]), ratio = moistcount/count)# %>% # %>% moistcount = nrow (ID2 [temp2$ID2 == 5])#filter(Moist == 5) %>% count(ID2, sort =TRUE) %>% 
+#table(temp3)
+sPPTtemp$Moist <- ifelse(sPPTtemp$Moist > 4, 1, 0) # flag locations where all months are >90mm rain. If all months then always overcapacity zonal soils
+                     # ifelse(temp2$Moist >3, 5.5,""))
+sPPTtemp <- sPPTtemp[c("zone","BGC","Moist")]
+#temp2$Moist <- as.integer(temp2$Moist) %>% replace_na(0)
+
+#temp2 <- temp2[temp2$Moist != "",] # only those points calculated to be moist
+#####################################
+wPPTtemp <- allDat[,c("BGC","PPT_at","PPT_wt","PAS")]
+allDat2 <- cbind(wPPTtemp,CMDtemp)
+#allDat <- cbind(wPPTtemp,sPPTtemp[c("Moist")])
+#allDat <- cbind(allDat,temp,temp2) ### use this one if Moist indicator is completed above
+allDat2$PPT.dorm <- allDat2$PPT_at + allDat2$PPT_wt
+ cmd <- aggregate( . ~ BGC, allDat2, mean) ##
+# Moist <- aggregate(ID1 ~ ID2 + Moist, temp2, length) # count of number of sites in each BGC meeting moist criteria
+
+# ##--------BGCs requiring special adjustments for deep snowpack
+    BGC_Special <- fread("./inputs/BGC_Special.csv", data.table = FALSE)
+    cmd <- full_join(cmd,BGC_Special, by = c("BGC" = "BGC"))
+
+  ####To adjust in zones with prolonged snowpack remove CMD from early growing season months
+    #cmd <- cmd %>% mutate(CMD = ifelse(Special == "snow", CMD_07, CMD))
+
+##-----Start of Growing season deficits 
+###adds deficit from incomplete recharge in dormant season. Estimated holding capcity of loamy soils is approximately 350mm.
+## 500m seems to be a better fit - approximates the extreme years
+cmd <- cmd[,c("BGC","CMD","PPT.dorm")]
+cmd$Def <- 500 - cmd$PPT.dorm 
+#----------------------temporary adjustment of CMD based on vegetation analysis
+  # Adjust <- fread("CMD_adjustments.csv", data.table=getOption("datatable.fread.datatable", TRUE))## 
+  # CMD <- merge(CMD,Adjust, by.x = "ID2")
+  # CMD$CMD <- CMD$CMD + CMD$CMD_Adjust
+#----------------------
+cmd$Def[cmd$Def < 0] <- 0 #negative values set to zero = no deficit
+cmd$CMD <- cmd$CMD + cmd$Def
+CMD <- cmd[,c("BGC","CMD")] # CMD now equals CMD.total
+
+###for each wetter rSMR, previous CMD is divided by 2
+for (i in 1:3){
+  CMD[,2+i] <- CMD[,1+i]/2
+}
+colnames(CMD) <- c("BGC","rSMR4","rSMR5","rSMR6","rSMR7")
+CMD <- CMD[,c(1,3:5,2)]
+
+###for each drier rSMR, previous CMD + 100
+for (i in 1:4){
+  CMD[,length(CMD)+1] <- CMD[,length(CMD)] + 125
+}
+colnames(CMD)[6:9] <- c("rSMR3","rSMR2","rSMR1","rSMR0")
+
+CMD <- CMD[,order(colnames(CMD))]## creates full grid of CMD values by BGC by rSMR class
+CMD <- CMD %>% filter(BGC %in% AllBGC) ## only those BGCs in the modelled set
+write.csv (CMD, "./outputs/CMD_by_rSMR.csv")
+```
+## Range of Climatic Moisture Deficit for Expert Assigned aSMR Class  of Zonal Sites
+
+The development of a seamless climate surface for British Columnbia with Climatic Moisture Deficit presented an opportunity for linking aSMR as defined by AET/PET ratio to the climate moisture deficit. Since the zonal site is thought to best reflect climatic conditions a comparison of the CMD range representing each of the aSMR classes as defined in the 1990 expert grid was used to define some initial CMD ranges that represent each class. Errors in aSMR assignment and in the Climate Surface are both likely but in aggregate believed to be generally accurate.
+### Boxplot of CMD ranges by expert rSMR4 class for creation of initial CMD ranges and ID of BGC outliers. A aSMR class of '5' = FRESH
+
+```{r box plot of CMD ranges by expert grid rSMR4, echo=FALSE, message = FALSE}
+expGrid <- read.csv("./inputs/ExpertGrid_adjusted.csv")
+expGrid$BGC <- gsub("[[:space:]]","",expGrid$BGC)
+colnames(expGrid)[-1] <- paste(colnames(expGrid)[-1],"_Exp", sep = "")
+CMDrange <- merge(CMD, expGrid, by = "BGC")
+CMDrange$rSMR4_Exp <- as.factor(CMDrange$rSMR4_Exp)
+CMDrange$BGC <- as.factor(CMDrange$BGC)
+p <- ggplot(CMDrange, aes(rSMR4_Exp, rSMR4))+
+  geom_boxplot(stat = "boxplot",  varwidth=TRUE) +
+  geom_point(shape = 21, fill = "red", size = 1)+
+  #geom_jitter(width = 0) +
+  ggtitle("CMD of zonal sites by expert grid aSMR class")+
+  xlab ("aSMR Class of rSMR4 (zonal) sites")+
+  ylab ("CMD.total")+
+  geom_text (aes(label= BGC), size = 4, hjust = -1, position = position_dodge(width=1) )#
+ggsave("./outputs/CMD_ranges of Expert aSMR of Zonal.pdf", plot = p, dpi = "print", device = "pdf", width = 15, height = 15, units = "cm")
+ggsave("./outputs/CMD_ranges.png", plot = p, dpi = "print", device = "png", width = 15, height = 15, units = "cm")
+plot(p)
+
+
+``` 
+
+##Convert CMD ranges into aSMR classes
+
+CMD values are adjusted for azonal rSMR positions. For each rSMR step drier add 100CMD. For each step wetter than zonal divide by two.
+This adjustment factor was made heuristically to most closely match the expert grid. The range of values representing an aSMR class remain unchanged for all aSMRs not representing excessive moisture
+Import a table of range rules for all rSMR classes to identify 1/2 step aSMR. Half-steps are required to align aSMR to rSMR in edatopic grids where an rSMR may straddle two aSMR classes.
+```{r convert CMD ranges to aSMR classes, echo=FALSE, message = FALSE, warning=FALSE}
+#rules <- read.csv("./inputs/aSMR_Rules_FullStep.csv") ### import rules on range of CMD which equates to aSMR
+rules <- read.csv("./inputs/aSMR_Rules_HalfStep_v12_30Oct2024.csv") ### import rules on range of CMD which equates to aSMR
+aSMRClass <- function(x) {
+  for (i in seq_along(ruleSelect$CMD)) {
+    if (i < length(ruleSelect$CMD) && x <= ruleSelect$CMD[i+1]) {
+      return(ruleSelect$aSMR[i])
+    }
+  }
+  return(x)
+}
+
+# Initialize an empty data.frame to accumulate results
+all_tests <- data.frame()
+
+for (i in seq_along(CMD$BGC)) {
+  CMD.bgc <- CMD[i,]
+  test <- foreach(SMR = colnames(CMD.bgc)[-1], .combine = cbind) %do% {
+    temp <- CMD.bgc %>% select(!!as.name(SMR))
+    temp[is.na(temp)] <- 0
+    
+    if (SMR == "rSMR7") {
+      ruleSelect <- rules[rules$SMRLevel == 7, -1]
+    } else if (SMR == "rSMR6") {
+      ruleSelect <- rules[rules$SMRLevel == 6, -1]
+    } else if (SMR == "rSMR5") {
+      ruleSelect <- rules[rules$SMRLevel == 5, -1]
+    } else {
+      ruleSelect <- rules[rules$SMRLevel == 0, -1]
+    }
+    
+    out <- sapply(temp, FUN = aSMRClass)
+    out
+  }
+  
+  test <- as.data.frame(test)
+  row.names(test) <- CMD.bgc$BGC
+  colnames(test) <- c("aSMR_0", "aSMR_1", "aSMR_2", "aSMR_3", "aSMR_4", "aSMR_5", "aSMR_6", "aSMR_7")
+  
+  # Accumulate the test data into all_tests
+  all_tests <- rbind(all_tests, test)
+}
+
+print(all_tests)
+
+#
+# test <- as.data.frame(all_tests)
+# row.names(test) <- CMD$BGC
+# colnames(test) <- c("aSMR_0", "aSMR_1", "aSMR_2", "aSMR_3", "aSMR_4", "aSMR_5", "aSMR_6", "aSMR_7")
+# test <- test %>% dmap(as.factor)
+
+# aSMR_rSMR <- cbind(CMD[1], test)
+# colnames(aSMR_rSMR) <- c("BGC", "rSMR0", "rSMR1", "rSMR2", "rSMR3", "rSMR4", "rSMR5", "rSMR6", "rSMR7")
+# save(aSMR_rSMR,file = "./outputs/rSMR_aSMR_ModelGrid.RData")
+# write.csv(aSMR_rSMR, file= "./outputs/modelled_WNAv11_rSMR_aSMR_grid_HalfStep.csv", row.names = FALSE)
+# 
+# aSMR_rSMR.long <- melt(aSMR_rSMR, id.vars= c("BGC"), variable_name = "rSMR", value.name = "aSMRC")
+# colnames(aSMR_rSMR.long) <- c("BGC", "rSMR", "aSMRC")
+# save(aSMR_rSMR.long,file = "./outputs/rSMR_aSMR_CalcList.RData")
+# SMRwide <- cbind(CMD, test)
+# SMRwide$BGC <- gsub("[[:space:]]","",SMRwide$BGC)
+
+#SMRCross <- melt(SMRwide) ###aSMR lookup
+#colnames(SMRCross) <- c("BGC", "rSMR", "aSMRC")
+
+#load ("rSMR_aSMR_CalcList.RData")
+```
+
+```{r boxplot of modelled CMD ranges, echo=FALSE, message = FALSE, fig.width=7,fig.height=6,fig.cap="\\label{fig:figs} CMD values by modelled half-step aSMR for rSMR4 sites"}
+p <- ggplot(SMRwide, aes(aSMR_4,rSMR4 ))+ ###change both numbers here to look at an rSMR class
+  geom_boxplot(stat = "boxplot",  varwidth=TRUE) +
+  geom_point(shape = 21, fill = "red", size = 1)+
+  geom_jitter(width = 0) +
+  ggtitle("CMD of zonal sites by modelled aSMR class")+
+  xlab ("aSMR Class")+
+  scale_y_continuous("CMD.total", breaks=seq(0,1800,100)) +
+  # ylab ("CMD.total")+
+  geom_text (aes(label= BGC), size = 1, hjust = -1, position = position_dodge(width=1) )#
+plot(p)
+
+# ggsave("./outputs/modelled_CMD_ranges.pdf", plot = p, dpi = "print", device = "pdf", width = 15, height = 50, units = "cm")
+# ggsave("./outputs/modelled_CMD_ranges.png", plot = p, dpi = "print", device = "png", width = 15, height = 15, units = "cm")
+
+
+```
+
+### Difference between modelled aSMR and the Expert crosswalk by rSMR class
+
+```{r compare to expert grid, fig.width = 20, echo=FALSE, message = FALSE, fig.width=8, fig.height=8, fig.cap="\\label{fig:figs} Count of model-expert differences by rSMR class"}
+
+expGrid <- read.csv("./inputs/ExpertGrid_adjusted.csv") ## or original
+expGrid$BGC <- gsub("[[:space:]]","",expGrid$BGC)
+rSMRListexp <- melt(expGrid, id.vars= c("BGC"), variable_name = "rSMR", value.name = "aSMRE")
+colnames(rSMRListexp) <- c("BGC", "rSMR", "aSMRE")
+rSMR_exp_calc <- left_join(aSMR_rSMR.long, rSMRListexp, by = c("BGC", "rSMR")  )
+rSMR_exp_calc <- drop_na(rSMR_exp_calc)
+aSMRdiff <- rSMR_exp_calc
+aSMRdiff$aSMRC <- as.numeric(aSMRdiff$aSMRC )
+aSMRdiff$diff <- aSMRdiff$aSMRE - aSMRdiff$aSMRC
+write.csv(aSMRdiff, "./outputs/Comparison of Modelled aSMR to Expert matrix.csv")
+
+#aSMRDiffCount2 <- aggregate(BGC ~ diff, aSMRdiff, length)
+#aSMRdiffmat <- cast(aSMRdiff, diff ~ aSMRC) #ignore message here casts to matrix
+dr <- ggplot(aSMRdiff, aes(diff))+
+  geom_histogram(binwidth = .25, fill = "dodgerblue3") +
+  facet_wrap(~ rSMR, nrow = 2)+
+      geom_vline (xintercept = 0, colour = "green")+
+  xlab ("Model is drier (positive) or wetter (negative) than Expert aSMR Class")+
+  ylab ("Count")
+
+plot(dr)
+ggsave("./outputs/aSMR difference expert_climate by rSMR.pdf", plot = dr, dpi = "print", device = "pdf", width = 15, height = 15, units = "in")
+# dev.off() 
+
+```
+### Difference between modelled aSMR and the Expert crosswalk by BGC
+
+```{r compare to expert grid by BGC, fig.width = 20, echo=FALSE, message = FALSE, fig.width=12, fig.height = 12,fig.cap="\\label{fig:figs} Count of model-expert differences by BGC"}
+db <- ggplot(aSMRdiff, aes(diff))+
+  geom_histogram(binwidth = .25, fill = "dodgerblue3") +
+  facet_wrap(~ BGC, ncol = 8)+
+    geom_vline (xintercept = 0, colour = "green")+
+  xlab ("Model is drier (positive) or wetter (negative) than Expert aSMR Class")+
+  ylab ("Count")
+
+plot(db)
+ggsave("./outputs/aSMR difference expert_climate by BGC.pdf", plot = db, dpi = "print", device = "pdf", width = 15, height = 25, units = "in")
+
+
+```
+
+## Calculate the estimated aSMR value of tree species in the BECMaster
+```{r species indicator value of aSMR, echo=FALSE, message = FALSE}  
+  ####Create Plots BGC & edatopic position data frame
+  load("./outputs/rSMR_aSMR_CalcList.RData") # load a saved aSMRxrSMR list
+    load("./inputs/VegDat_Clean.RData")
+ PlotCount <- count (vegData, c("PlotNumber"))
+ #PlotCount2 <- aggregate(Species ~ PlotNumber, vegData, length)
+ PlotCount3 <- as.data.frame (unique(vegData$PlotNumber)) 
+ #vegData <- read.table("BecMaster15VegData.txt", header = TRUE)
+  
+  codeCross <- read.csv("./inputs/TreeCodeCrosswalk.csv", stringsAsFactors = FALSE)
+  
+  #vegData <- separate(vegData, Species, c("Species","Type"), "-", remove = TRUE)
+  #---------Option for Trees only
+  #  vegData <- vegData[vegData$Type %in% c(1,2),]
+  #--------------------------
+  BGCLookup <- read.csv("./inputs/BGCLookup.csv", stringsAsFactors = FALSE) ## check is this BGC overlayed by spatial location?
+  BGCLookup <- BGCLookup[,c(3,12)]
+  colnames(BGCLookup)[1] <- "PlotNumber"
+  
+  ##import edatopic data
+  plotEnv <- read.csv("./inputs/KiriEnvDat.csv", stringsAsFactors = FALSE)# generated from Vpro BECMaster plot|BGC|SMR|SNR
+  plotEnv <- plotEnv[plotEnv$NutrientRegime %in% c("A","B","C","D","E"),] ## removes plots with non-conforming full classes
+  plotEnv <- plotEnv[plotEnv$MoistureRegime %in% c(0,1,2,3,4,5,6,7,8),] ## removes plots with non-conforming full classes
+  plotEnv <- plotEnv[,-2] #removed BGC to be added from BGCLookup
+  plotEnv <- merge(plotEnv,BGCLookup, by = "PlotNumber", all.x = TRUE)
+  plotEnv <- plotEnv[plotEnv$BGC_LABEL != "",]
+  plotEnv <- plotEnv[plotEnv$BGC_LABEL != " ",]
+  plotEnv$BGC <- gsub("[[:space:]]","",plotEnv$BGC_LABEL)
+  plotEnv$BGC_Zone <- substring(plotEnv$BGC_LABEL, 1, 4)
+  colnames (plotEnv) [2] <- "rSMR"
+###load the aSMR to rSMR crosswalk in long format
+#load( "./inputs/rSMR_aSMR_Both.RData")
+colnames(aSMR_rSMR)[1] <- "BGC"
+aSMR_rSMR.long$rSMR <- gsub("rSMR", "", aSMR_rSMR.long$rSMR) ## removes the rSMR prefix from the rSMR crosswalk
+#rSMR_exp_calc[1:4] <- lapply(rSMR_exp_calc, factor)
+#    SMRCross$rSMR <- gsub("rSMR", "", SMRCross$rSMR)
+# colnames(SMRCross) [1:3] <- c("BGC_noSpace", "rSMR", "aSMR")
+Env2 <- merge(plotEnv, aSMR_rSMR.long, by = c("BGC", "rSMR"),  all.x = TRUE)
+plotEnv2 <- Env2 %>% select (PlotNumber, BGC_Zone, BGC, rSMR, aSMRC, NutrientRegime)
+ #   modBGC <- read.csv("ModelledBGC.csv", stringsAsFactors = FALSE)
+##Count the number of plots in each aSMR category
+aSMRCount <- count (plotEnv2, c("aSMRC")) #count of species occurrences by modelled aSMR 1/2 step
+    save(plotEnv2,file = "./outputs/PlotEnv.RData")
+    #load( "PlotEnv.RData")
+  ############Add BGC and aSMR info to vegetation list data
+Veg_Env <- merge(vegData, plotEnv2, by = "PlotNumber", all.x = TRUE)
+Veg_Env <- Veg_Env[!is.na(Veg_Env$aSMRC),]
+Veg_Env <- Veg_Env[Veg_Env$BGC != "",]
+#Veg_Env$aSMR <- as.factor(Veg_Env$aSMRC)
+#Veg_Env2 <- group_by(Veg_Env, Species, aSMR)
+Veg_Env3 <- plyr::count (Veg_Env, c("Species", "aSMRC")) #count of species occurrences by modelled aSMR 1/2 step
+Veg_Env4 <- aggregate(Cover ~ Species + aSMRC, Veg_Env, sum) #sum of covers of species occurrences by modelled aSMR 1/2 step
+Veg_Env5 <- left_join(Veg_Env3, Veg_Env4)
+Veg_Env5$CovMean <- (Veg_Env5$Cover/Veg_Env5$freq) * sqrt(Veg_Env5$freq)
+############summarize species occurrences by aSMR category for determining indicator values
+Spp_aSMR <- cast(Veg_Env3, Species ~ aSMRC) #ignore message here casts to matrix
+#Spp_aSMRcov <- cast(Veg_Env4, Species ~ aSMRC) #ignore message here casts to matrix
+Spp_aSMRcov <- cast(Veg_Env4, Species ~ aSMRC) 
+Spp_aSMRcovmean <- cast(Veg_Env5[-c(3:4)], Species ~ aSMRC) 
+
+write.csv(Spp_aSMR, file= "./outputs/Speciescount_by_aSMR_grid_halfstep.csv")
+write.csv(Spp_aSMRcov, file= "./outputs/Speciescover_by_aSMR_grid_halfstep.csv")
+write.csv(Spp_aSMRcovmean, file= "./outputs/Speciesmeancover_by_aSMR_grid_halfstep.csv")
+
+#### build some summaries to look at species distribution by calculated aSMR
+###Start Kiri##############################
+####calculate percent
+Spp_CountPerc <- Spp_aSMR
+Spp_CountPerc[is.na(Spp_CountPerc)] <- 0 ####fill NA with 0
+#Spp_CountPerc$Total <- rowSums(Spp_CountPerc[,-1])
+#Spp_CountPerc[,!colnames(Spp_CountPerc) %in% c("Species","Total")] <- (Spp_CountPerc[,!colnames(Spp_CountPerc) %in% c("Species","Total")]/Spp_CountPerc$Total)*100
+
+###Now for %cover
+Spp_aSMRcov[is.na(Spp_aSMRcov)] <- 0 ####fill NA with 0
+Spp_CovPerc <- Spp_aSMRcov
+Spp_CovPerc$Total <- rowSums(Spp_CovPerc[,-1], na.rm = TRUE)
+Spp_CovPerc[,!colnames(Spp_CountPerc) %in% c("Species","Total")] <- (Spp_CovPerc[,!colnames(Spp_CountPerc) %in% c("Species","Total")]/Spp_CovPerc$Total)*100
+
+####Max, Min and Median values
+#install.packages("modeest") ##package to calculate mode
+#library(modeest)
+
+temp <- melt(Spp_aSMRcov, id.vars = "Species")###to long format
+tempCount <- Spp_aSMR
+
+#tempCount <- melt(tempCount, id.vars = "Species")
+tempCount <- tempCount[!is.na(tempCount$Species),]##remove NA species
+tempCount[is.na(tempCount)] <- 0
+tempCount [-1][tempCount[-1] < 6] <- 0###remove aSMR counts with few occurrences
+tempCount <-cbind(tempCount,rowSums(tempCount[,-c(1)]))
+colnames(tempCount) [18] <- c("Sum")
+tempCount <- tempCount[tempCount$Sum >9,]###remove species with few occurrences
+SppList <- as.character(unique(tempCount$Species))
+
+####Create stats for each species
+stats <- foreach(Spp = SppList, .combine = rbind) %do% {
+  SppSub <- temp[temp$Species == Spp,]###subset for species
+  mode <- SppSub$aSMRC[SppSub$value == max(SppSub$value)] ###Mode is aSMR at max value
+  SppSub$Integral <- cumsum(SppSub$value) ###cumulative sum
+  SppSub$StandValue <- (SppSub$value/sum(SppSub$value))*1000 ###standardise value
+  q1 <- 0.1*sum(SppSub$value)
+  q2 <- 0.9*sum(SppSub$value)
+  q10 <- SppSub$aSMRC[SppSub$Integral >= q1][1] ###aSMR value at 10% percentile
+  q90 <- SppSub$aSMRC[SppSub$Integral >= q2][1]###and 90%
+  
+  ###Caclulate standard deviation by repeating aSMR value by standardised cover value
+  s2 <- sd(c(rep(0.5,SppSub$StandValue[1]),rep(1,SppSub$StandValue[2]),rep(1.5,SppSub$StandValue[3]),rep(2,SppSub$StandValue[4]),
+           rep(2.5,SppSub$StandValue[5]),rep(3,SppSub$StandValue[6]),rep(3.5,SppSub$StandValue[7]),rep(4,SppSub$StandValue[8]),
+           rep(4.5,SppSub$StandValue[9]),rep(5,SppSub$StandValue[10]),rep(5.5,SppSub$StandValue[11]),rep(6,SppSub$StandValue[12]),
+           rep(6.5,SppSub$StandValue[13]),rep(7,SppSub$StandValue[14]),rep(7.5,SppSub$StandValue[15]),rep(8,SppSub$StandValue[16])))
+
+  CountSub <- tempCount[tempCount$Species == Spp,]
+  numPlots <- sum(CountSub$value)
+  
+  out <- data.frame(Species = Spp, Q10 = q10, Mode = mode, Q90 = q90, SD = s2, NumPlots = CountSub$Sum)
+  out
+}
+
+write.csv(stats, "./outputs/Species_aSMR_Statistics.csv")
+```
+### Bar graphs of species abundance by aSMR class for BEC data
+```{r build species abundance bargraphs by aSMR, echo=FALSE, message = FALSE, fig.width=12,fig.height=11,fig.cap="\\label{fig:figs} Ratio Species Cover across Modelled aSMR classes" }
+###Build Graphics
+choices <- as.character(tempCount$Species[rowSums(tempCount[,-1]) > 200]) ###only allow selection of species with certain abundance cutoff
+#Spp <- select.list(choices, graphics = TRUE, multiple = TRUE) ###Select which species to plot (can choose multiple)
+Spp <- c("ABIEAMA", "ABIEGRA","ABIELAS", "XANTNOO", "JUNISCO", "LARILAR", "LARILYA", "LARIOCC", 
+         "PINUALB", "PINUCON", "PINUMON", "PINUPON","PICEENE", "PICEMAR",  "PICESIT","PSEUMEN", 
+         "THUJPLI","TSUGHET", "TSUGMER", 
+         "ACERMAC", "ALNURUB", "ARBUMEN", "BETUPAP",  "POPUTRE",  "POPUTRI", "QUERGAR1" )
+#Spp <- c("PETAFRI", "MAIADIL","OPLOHOR")#Moist5
+#Spp <- c("LYSIAME", "MENYTRI",  "SPHAFUS")
+temp <- ""
+temp <- as.data.frame(Spp_aSMRcov[Spp_aSMRcov$Species %in% Spp,])##subset for selected species
+rownames(temp) <- temp$Species
+temp_pc <- temp %>% adorn_percentages(denominator = "row")
+temp_pc <- temp_pc[,-1]
+temp_pc <- as.data.frame(t(temp_pc))
+temp_pc$aSMR <- rownames(temp_pc)
+
+multSpp <- melt(temp_pc, id.vars = "aSMR")###Create data set for doing multiple curves at once
+
+#colnames (temp) [1] <- "Total"
+#temp$Total <- rowSums(temp[,-length(temp)]) ###Sum together if multiple species selected
+
+colnames(multSpp)[2:3] <- c("Spp","Total")
+multSpp$Spp <- as.factor(multSpp$Spp)
+
+plotsmr <- ggplot(multSpp, aes(x = aSMR, y = Total)) +
+  geom_bar(position = "dodge", stat = "identity")+
+  facet_wrap(~ Spp, ncol = 4)+
+  geom_vline (xintercept = 11, colour = "green") +
+  xlab ("Modelled aSMR Class")+
+  ylab ("Ratio of Cover")
+
+plot(plotsmr)
+
+
+```
+### Bar graphs of species mean abundance by aSMR class for BEC data
+```{r build species abundance bargraphs by aSMR, echo=FALSE, message = FALSE, fig.width=12,fig.height=11,fig.cap="\\label{fig:figs} Ratio Species Cover across Modelled aSMR classes" }
+###Build Graphics
+choices <- as.character(tempCount$Species[rowSums(tempCount[,-1]) > 200]) ###only allow selection of species with certain abundance cutoff
+#Spp <- select.list(choices, graphics = TRUE, multiple = TRUE) ###Select which species to plot (can choose multiple)
+Spp <- c("ABIEAMA", "ABIEGRA","ABIELAS", "XANTNOO", "JUNISCO", "LARILAR", "LARILYA", "LARIOCC", 
+         "PINUALB", "PINUCON", "PINUMON", "PINUPON","PICEENE", "PICEMAR",  "PICESIT","PSEUMEN", 
+         "THUJPLI","TSUGHET", "TSUGMER", 
+         "ACERMAC", "ALNURUB", "ARBUMEN", "BETUPAP",  "POPUTRE",  "POPUTRI", "QUERGAR1" )
+#Spp <- c("PETAFRI", "MAIADIL","OPLOHOR")#Moist5
+#Spp <- c("LYSIAME", "MENYTRI",  "SPHAFUS")
+temp <- ""
+temp <- as.data.frame(Spp_aSMRcovmean[Spp_aSMRcovmean$Species %in% Spp,])##subset for selected species
+rownames(temp) <- temp$Species
+temp_pc <- temp# %>% adorn_percentages(denominator = "row")
+temp_pc <- temp_pc[,-1]
+temp_pc <- as.data.frame(t(temp_pc))
+temp_pc$aSMR <- rownames(temp_pc)
+
+multSpp <- melt(temp_pc, id.vars = "aSMR")###Create data set for doing multiple curves at once
+
+#colnames (temp) [1] <- "Total"
+#temp$Total <- rowSums(temp[,-length(temp)]) ###Sum together if multiple species selected
+
+colnames(multSpp)[2:3] <- c("Spp","Total")
+multSpp$Spp <- as.factor(multSpp$Spp)
+
+plotsmr <- ggplot(multSpp, aes(x = aSMR, y = Total)) +
+  geom_bar(position = "dodge", stat = "identity")+
+  facet_wrap(~ Spp, ncol = 4)+
+  geom_vline (xintercept = 11, colour = "green") +
+  xlab ("Modelled aSMR Class")+
+  ylab ("Ratio of Cover")
+
+plot(plotsmr)
+
+
+```
+
+### Bar graphs of species presence by aSMR class for BEC data
+```{r build species presence bargraphs by aSMR, echo=FALSE, message = FALSE, fig.width=12,fig.height=11,fig.cap="\\label{fig:figs} Ratio Species Cover across Modelled aSMR classes" }
+temp2 <- ""
+Spp_CountPerc$Species <- as.character(Spp_CountPerc$Species)
+temp2 <- as.data.frame(Spp_CountPerc[Spp_CountPerc$Species %in% Spp,])##subset for selected species
+rownames(temp2) <- temp2$Species
+temp_pp <- temp2#  %>% select(-Total) #%>% drop_na()
+#temp_pp <- temp2 %>% adorn_percentages(denominator = "row")
+temp_pp <- temp_pp[,-1]
+temp_pp <- as.data.frame(t(temp_pp))
+temp_pp$aSMR <- rownames(temp_pp)
+
+multSpp2 <- melt(temp_pp, id.vars = "aSMR")###Create data set for doing multiple curves at once
+
+#colnames (temp) [1] <- "Total"
+#temp$Total <- rowSums(temp[,-length(temp)]) ###Sum together if multiple species selected
+
+colnames(multSpp2)[2:3] <- c("Spp","Total")
+multSpp2$Spp <- as.factor(multSpp2$Spp)
+####Create bar plot of cover by aSMR  for single species
+# ggplot(temp, aes(x = aSMR, y = Total))+
+#   geom_bar(position = "dodge", stat = "identity")+
+#   
+ # labs(y = "Cover", title = paste(Spp, collapse = ", "))
+
+plotcnt <- ggplot(multSpp2, aes(x = aSMR, y = Total)) +
+  geom_bar(position = "dodge", stat = "identity")+
+  facet_wrap(~ Spp, ncol = 3)+
+  geom_vline (xintercept = 11, colour = "green") +
+  xlab ("Modelled aSMR Class")+
+  ylab ("Ratio of Cover")
+
+plot(plotcnt)
+
+
+```
+
+```{r build species abundance curves by aSMR, echo=FALSE, message = FALSE}
+
+#multSpp <- melt(temp, id.vars = "aSMR")###Create data set for doing multiple curves at once
+#colnames(multSpp)[2:3] <- c("Species","Cover")
+
+#temp$Total <- ifelse (ncol(temp) <3 , temp[,1], rowSums(temp[,-length(temp)])) ### why does this not work?
+####fit gaussian spp curves and plot on same graph######################
+# pdf("./outputs/TreeSpeciesaSMR_curves.pdf")
+# jpeg("./outputs/TreeSpeciesaSMR_curves.jpeg", width = 700, height = 350)
+# plot(0,0, type = "n", xlim = c(1,8), ylim = c(0,0.3), xlab = "aSMR", ylab = "Standardised Cover")
+# cols <- rainbow(length(Spp))
+# #CurrSpp ="ABIELAS"
+# for(i in 1:length(Spp)){
+#   CurrSpp <- Spp[i]
+#   datSub <- multSpp[multSpp$Spp == CurrSpp,]
+# 
+#   dat <- data.frame(x=as.numeric(as.character(datSub$aSMR)), r=datSub[,3])
+#   #dat$r <- dat$r/sum(dat$r)###have to standardise this is now already done in the script above 
+#   mu <- dat$x[dat$r == max(dat$r)] ###start optimisation at maximum so doesn't get stuck
+# 
+#   g.fit <- try(nls(r ~ k*exp(-1/2*(x-mu)^2/sigma^2), start=c(mu=mu,sigma=1,k=0.5) , data = dat, nls.control(maxiter = 1000, minFactor = 0.000001)))###Non-linear least-squares regression using gaussian formula
+#   if(isTRUE(class(g.fit)=="try-error")){ ####if it doesn't work, try again now setting the mean to the maximum value (usually 8)
+#     points(r ~ x, data = dat, pch = 4, col = cols[i])
+#     dat$r <- jitter(dat$r)
+#     g.fit <- nls(r ~ k*exp(-1/2*(x-mu)^2/sigma^2), start=c(sigma=1,k=0.5) , data = dat, nls.control(maxiter = 1000, minFactor = 0.000001))###Non-linear least-squares regression using gaussian formula
+#     v <- summary(g.fit)$parameters[,"Estimate"] ###v contains the three parameters for the best fit curve
+#     plot(function(x) v[2]*exp(-1/2*(x-mu)^2/v[1]^2),col=cols[i],add=T,xlim=range(dat$x))
+#   }else{
+#     v <- summary(g.fit)$parameters[,"Estimate"] ###v contains the three parameters for the best fit curve
+#     points(r ~ x, data = dat, pch = 4, col = cols[i])
+#     plot(function(x) v[3]*exp(-1/2*(x-v[1])^2/v[2]^2),col=cols[i],add=T,xlim=range(dat$x))
+#   }
+# }
+# legend("topright", Spp, col = cols, pch = 15, cex = 0.8)
+# dev.off()
+
+```
+
+######## Convert smr distribution into aSMR indicator values
+##########These calculations could be augmented by other metrics such as SD  and min/max limits
+
+```{r build indicator groups of aSMR, echo=FALSE, message = FALSE}
+
+# Spp_aSMR[is.na(Spp_aSMR)] <- 0 ## ignore error messages here
+# Spp_aSMR <-cbind(Spp_aSMR,rowSums(Spp_aSMR[,-c(1)]))
+# colnames(Spp_aSMR) [19] <- c("Sum")
+# Spp_aSMR <- Spp_aSMR[Spp_aSMR$Sum >9,] ## remove species with few occurrences
+# Spp_aSMR2 <- adorn_percentages(Spp_aSMR[,-c(19)])
+# #Spp_aSMR2 <- adorn_pct_formatting(Spp_aSMR, digits = 1) # function does not work properly
+# Spp_aSMR2$TD0 <- Spp_aSMR2$'0'
+# Spp_aSMR2$TD1 <- Spp_aSMR2$TD0 + Spp_aSMR2$'0.5'+ Spp_aSMR2$'1'
+# Spp_aSMR2$TD2 <- Spp_aSMR2$TD1 + Spp_aSMR2$'1.5'+ Spp_aSMR2$'2'
+# Spp_aSMR2$TD3 <- Spp_aSMR2$TD2 + Spp_aSMR2$'2.5'+ Spp_aSMR2$'3'
+# Spp_aSMR2$TD4 <- Spp_aSMR2$TD3 + Spp_aSMR2$'3.5'+ Spp_aSMR2$'4'
+# Spp_aSMR2$Fresh <- Spp_aSMR2$'4.5'+ Spp_aSMR2$'5' + Spp_aSMR2$'5.5'
+# Spp_aSMR2$Moist <- Spp_aSMR2$'6'+ Spp_aSMR2$'6.5' + Spp_aSMR2$'7' 
+# Spp_aSMR2$Wet <- Spp_aSMR2$'7.5' + Spp_aSMR2$'8' 
+# ###converts the aSMRs into indicator groups
+# Spp_aSMR2$SMR_Ind <-   ifelse(Spp_aSMR2$TD0>=.25, "TD0", 
+#                             ifelse (Spp_aSMR2$TD1 > 0.25, "TD1",  
+#                                 ifelse (Spp_aSMR2$TD2 > 0.25, "TD2",
+#                                   ifelse (Spp_aSMR2$TD3 > 0.25, "TD3",
+#                                     ifelse (Spp_aSMR2$TD4 > 0.25, "TD4",
+#                         ifelse(Spp_aSMR2$Wet>=.25, "W", 
+#                                         ifelse ((Spp_aSMR2$Moist +Spp_aSMR2$Wet) > 0.40, "M",
+#                                               ifelse (Spp_aSMR2$Fresh > 0.25, "F", ""))))))))
+# Spp_aSMR2$SMR_Ind <- ifelse ((Spp_aSMR2$Moist + Spp_aSMR2$Wet)>0.10 & Spp_aSMR2$TD4 >0.10, "X",Spp_aSMR2$SMR_Ind)                                                  
+# write.csv(Spp_aSMR2, file= "Spp_SMR_CalculationMatrix.csv")
+# 
+# Spp_Ind <- Spp_aSMR2[,c(1,27)] # create simple list of calculated indicator value
+# 
+# ###update indicator list with exceptions file Spp_SMRInd_Exceptions.csv
+# SMRexcept <- read.csv("Spp_SMRInd_Exceptions.csv")
+# SMRexcept <- SMRexcept[SMRexcept$Exceptions!="",]
+# SMRexcept <- SMRexcept[,c(2,4)]
+# SMRexcept$Exceptions <- as.character (SMRexcept$Exceptions)
+# Spp_Ind <- merge(Spp_Ind, SMRexcept, by = "Species", all=TRUE)
+# Spp_Ind$SMR_Ind <-   ifelse(!is.na (Spp_Ind$Exceptions), Spp_Ind$Exceptions,Spp_Ind$SMR_Ind)
+# Spp_Ind <- Spp_Ind[,c(1,2)]
+# write.csv(Spp_Ind, file= "Spp_SMRInd.csv")
+# save(Spp_Ind,file = "Spp_aSMR_Ind.RData")
+# 
+# #_____WILL _____________________________###
+# ###########Create smr indicator summaries by plot
+# load("Spp_aSMR_Ind.RData")
+# 
+# 
+# #Spp_Ind2 <- unlist(lapply(Spp_Ind$SMR_Ind, tolower))
+# vegDataSMR <- merge(vegData, Spp_Ind, by.x = "Species", all.x = TRUE) ##add indicator value to species
+# ##reduce to sum of indicator classes by plot
+# PlotInd <- dcast(vegDataSMR, PlotNumber ~  SMR_Ind, value.var = "Cover",fun.aggregate = sum, na.rm = TRUE)#roll up by indicator value
+# vegDataSMR2 <- merge(PlotInd, plotEnv2, by.x = "PlotNumber", all.x = TRUE) ##add ENV info
+# save(vegDataSMR2,file = "PlotIndicatorSum.RData")
+# write.csv(vegDataSMR2, file= "PlotIndicatorSum.csv")
+# ############add estimated aSMR from vegetation calculation
+# 
+# vegDataSMR2$aSMR_Veg <- 
+#   ifelse (vegDataSMR2$VW > 20, "9VW",
+#       ifelse((vegDataSMR2$W + vegDataSMR2$VW)>20 & (vegDataSMR2$TD1 + vegDataSMR2$TD2 + vegDataSMR2$TD3 + vegDataSMR2$TD4 + vegDataSMR2$F)/(vegDataSMR2$W + vegDataSMR2$VW) <1,"8W",
+#           ifelse (((vegDataSMR2$M) >30 & (vegDataSMR2$W + vegDataSMR2$VW) > 10), "7VM",
+#                 ifelse (((vegDataSMR2$M + vegDataSMR2$W + vegDataSMR2$VW) > 10), "6M", 
+# ifelse(((vegDataSMR2$TD0>=20) & (vegDataSMR2$TD1 + vegDataSMR2$TD2 + vegDataSMR2$TD3 + vegDataSMR2$TD4 + vegDataSMR2$F) < 20), "0XD", 
+#     ifelse ((((vegDataSMR2$TD0 + vegDataSMR2$TD1)>=20) & (vegDataSMR2$TD2 + vegDataSMR2$TD3 + vegDataSMR2$TD4 + vegDataSMR2$F) < 20), "1ED",
+#             ifelse (((((vegDataSMR2$TD0 + vegDataSMR2$TD1 + vegDataSMR2$TD2) > 10) & (vegDataSMR2$TD0 + vegDataSMR2$TD1 + vegDataSMR2$TD2)/(vegDataSMR2$TD3 + vegDataSMR2$TD4 + vegDataSMR2$F) > 1)), "2VD",
+# #            ifelse ((((vegDataSMR2$TD0 + vegDataSMR2$TD1 + vegDataSMR2$TD2) > 20) & (vegDataSMR2$TD3 + vegDataSMR2$TD4 + vegDataSMR2$F) < 20), "2VD",
+# #            ifelse ((((vegDataSMR2$TD0 + vegDataSMR2$TD1 + vegDataSMR2$TD2 + vegDataSMR2$TD3) > 20) & (vegDataSMR2$TD4 + vegDataSMR2$F) < 20), "3MD",      
+#             ifelse (((((vegDataSMR2$TD0 + vegDataSMR2$TD1 + vegDataSMR2$TD2 + vegDataSMR2$TD3) > 10) & (vegDataSMR2$TD0 + vegDataSMR2$TD1 + vegDataSMR2$TD2 + vegDataSMR2$TD3)/ (vegDataSMR2$TD4 + vegDataSMR2$F) >.5)), "3MD",      
+#                   ifelse (((vegDataSMR2$TD0 + vegDataSMR2$TD1 + vegDataSMR2$TD2 + vegDataSMR2$TD3 + vegDataSMR2$TD4 > 10) & (vegDataSMR2$M + vegDataSMR2$W) < 2), "4SD",
+#                           ifelse (((vegDataSMR2$TD0 + vegDataSMR2$TD1 + vegDataSMR2$TD2 + vegDataSMR2$TD3 + vegDataSMR2$TD4 > 3) & (vegDataSMR2$F + vegDataSMR2$M + vegDataSMR2$W) < 10), "4SD","5F"))))))))))
+#                       #  
+#                                         #ifelse (((vegDataSMR2$M + vegDataSMR2$W) > 5) & vegDataSMR2$TD4 >30, "SD", "F")))))))) 
+# Plot_aSMR <- vegDataSMR2[,c("PlotNumber", "aSMR_Veg")]                                      
+# 
+# #####Summarize plot aSMR by hierarchical unit
+# SUhier <- read.csv("HierarchyTestExportSBSmc2.csv", stringsAsFactors = FALSE)
+# colnames(SUhier)[1:12]=c("PlotNumber", "1Region", "2Class", "3Order", "4SubOrder", "5Alliance", "6SubAlliance", "7Association", "8SubAssociation", "9Facies", "10Working", "11SiteSeries")
+# SUhierALL <-SUhier
+# level <- "11SiteSeries"
+# SUhier <- SUhier[,c("PlotNumber", level)]
+# Plot_aSMR <- merge(Plot_aSMR, SUhier, by = "PlotNumber", all.x = FALSE)
+# VegDataSMR3 <-merge(vegDataSMR2, SUhier, by = "PlotNumber", all.x = FALSE)
+# write.csv(VegDataSMR3, file = "SBSmc2_Plot_aSMR count.csv")
+# colnames(Plot_aSMR) [3] <- "SiteSeries"
+# SS_aSMR <- dcast (Plot_aSMR, SiteSeries ~  aSMR_Veg, fun.aggregate = length)
+# write.csv(SS_aSMR, file = "SBSmc2_SiteSeries_aSMR count.csv")
+# #add function to add the expert and modelled aSMR to the veg assessment
+# #SS_aSMR_compare <- merge(SS_aSMR, , by = "BGC", all.x = FALSE)  
+```
+
+#Old graphing functions
+
+```{r additional old graphing, echo=FALSE, message = FALSE}
+# #colnames(expGrid)[-1] <- paste(colnames(expGrid)[-1],"_E", sep = "")
+# 
+# comp <- merge(expGrid, aSMR_rSMR, by = "BGC") 
+# 
+# for(i in 1:8){
+#   comp[,length(comp) + 1] <- comp[,i+1] - comp[,i+9]
+# }
+# 
+# comp <- comp[,-(2:17)] ###outputs matrix showing difference between expert and modelled aSMR
+# colnames(comp) <- colnames(test)
+# hist(comp$SMR4, col = "purple")
+# 
+# for(i in 1:8){
+#   hist(comp[,i+1], col = "purple", main = colnames(current)[i+1])
+# }
+# 
+# 
+# comp$Zone <- gsub("[[:lower:]]|[[:digit:]]","",comp$BGC) # adds Zone to comparison
+# zoneQual <- aggregate(rSMR4 ~ Zone, comp, mean)
+# barplot(zoneQual$rSMR4, names.arg = zoneQual$Zone, width=4) # bar plot of difference between expert and modelled by zone
+# 
+# compLong <- melt(comp[,-10])
+# colnames(compLong) <- c("BGC","rSMR","Diff")
+# write.csv(compLong, file= "rSMR_aSMR_differencelist_halfstep.csv") # output for overall stats
+# compLong <- compLong[abs(compLong$Diff) >= 1,] # set difference level to report below
+# temp <- melt(expGrid)
+# colnames(temp) <- c("BGC","rSMR","Expert")
+# temp$rSMR <- gsub("r","",temp$rSMR)
+# compLong <- merge(compLong, temp, by = c("BGC","rSMR"), all.x = TRUE) ### list of 1 or greater differences
+# comp2 <- comp
+# write.csv(comp2, file= "compared_rSMR_aSMR_grid_halfstep300rules2b100.csv")
+# comp2[comp2 == 0.5 | comp2 == -0.5] <- 0 # set differences of .5 to zero
+# write.csv(comp2, file= "compared_rSMR_aSMR_grid_fullstep.csv")
+# ### outputs PDFs barcharts by zone comparing difference
+# for(j in unique(comp$Zone)){
+#   pdf(paste(j,"fullstep.pdf", sep = ""))
+#   current <- comp2[comp2$Zone == j,]
+#   layout(rbind(c(1,2,3), c(4,5,6), c(7,8,9)),widths=c(1,1,1), heights =c(1,1,1), respect=TRUE)
+#   par(mai = c(0.5, 0.5, 0.2, 0.2)) #speSEfies the margin size in inches
+#   for(i in 1:8){
+#     hist(current[,i+1], breaks = 7, col = "purple", main = colnames(current)[i+1])
+#   }
+#   dev.off()
+# }
+# 
+# ###Output for AllBGCs combined - set comp2 above for either half step or full step
+# #for(j in unique(comp$Zone)){
+#   pdf("AllBGCHalfstep.pdf")
+#   current <- comp
+#   layout = layout  #  layout(rbind(c(1,2,3), c(4,5,6), c(7,8,9)),widths=c(1,1,1), heights =c(1,1,1), respect=TRUE)
+#   par = par #(mai = c(0.5, 0.5, 0.2, 0.2)) #speSEfies the margin size in inches
+#    for(i in 1:8){
+#     hist(current[,i+1], breaks = 7, col = "purple", main = colnames(current)[i+1])
+#   }
+#   dev.off() 
+```
