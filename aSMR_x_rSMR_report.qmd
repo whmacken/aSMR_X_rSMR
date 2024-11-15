@@ -61,15 +61,15 @@ This script represents a process to both complete the rSMR x aSMR matrix for con
 
 ```{r import tables, echo=FALSE, message = FALSE, warning=FALSE}
 ###Climate data 1961-90for representative points per BGC  with all variables# allDat <- fread("./inputs/ALLBGC_AllVars.csv", data.table = FALSE, stringsAsFactors = FALSE)
-allDat <- fread("./inputs/climr_coastv13_2_5kmgrid.csv", data.table = FALSE, stringsAsFactors = FALSE) %>% mutate(BGC = BGC_2)
+allDat <- fread("./inputs/climr_WNAv13_5kmgrid.csv", data.table = FALSE, stringsAsFactors = FALSE) #%>% mutate(BGC = BGC_2)
 allDat <- allDat %>% filter(grepl('^CWH|^CDF|MH|IDFww|CMA', BGC)) 
-
-allDat <- fread("./inputs/climr_WNAv12_5kmgrid.csv", data.table = FALSE, stringsAsFactors = FALSE)
+allDat <- allDat %>% filter(!grepl('_', BGC)) 
+#allDat <- fread("./inputs/climr_WNAv12_5kmgrid.csv", data.table = FALSE, stringsAsFactors = FALSE)
 
 
 CMDtemp <- allDat[,grep("CMD",colnames(allDat))]
-AllBGC <- unique(allDat$BGC)
-#write.csv(AllBGC, "./inputs/AllmodelledBGCs.csv")
+AllBGC <- unique(allDat$BGC) %>% data.frame() %>% pull()
+#fwrite(AllBGC, "./inputs/Coast_BGCs.csv")
 # ###work on checking for excess summer precip in all month leading to Moist aSMR zonal sites
 #temp2 <- allDat[,grep("PPT0", colnames(allDat))]
 sPPTtemp <- allDat[c("zone", "BGC", "PPT_05","PPT_06","PPT_07","PPT_08","PPT_09" )]
@@ -215,6 +215,7 @@ gt::gt(expGrid,
 #| warning: false
 #| tbl-align: "left"
 rules <- read.csv("./inputs/aSMR_Rules_HalfStep_v12_31Oct2024.csv") ### import rules on range of CMD which equates to aSMR
+BGC.rain <- fread("./inputs/Coast_freq_rain_BGCs.csv") %>% filter(freq_rain %in% "y") %>% pull(bgc)
 aSMRClass <- function(x) {
   for (i in seq_along(ruleSelect$CMD)) {
     if (i < length(ruleSelect$CMD) && x <= ruleSelect$CMD[i+1]) {
@@ -226,7 +227,7 @@ aSMRClass <- function(x) {
 
 # Initialize an empty data.frame to accumulate results
 all_cmd <- data.frame()
-
+#i=1
 for (i in seq_along(CMD$BGC)) {
   CMD.bgc <- CMD[i,]
   test <- foreach(SMR = colnames(CMD.bgc)[-1], .combine = cbind) %do% {
