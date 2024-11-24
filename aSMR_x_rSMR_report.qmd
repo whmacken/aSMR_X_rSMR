@@ -61,9 +61,9 @@ This script represents a process to both complete the rSMR x aSMR matrix for con
 
 ```{r import tables, echo=FALSE, message = FALSE, warning=FALSE}
 ###Climate data 1961-90for representative points per BGC  with all variables# allDat <- fread("./inputs/ALLBGC_AllVars.csv", data.table = FALSE, stringsAsFactors = FALSE)
-allDat <- fread("./inputs/climr_WNAv13_5kmgrid.csv", data.table = FALSE, stringsAsFactors = FALSE) #%>% mutate(BGC = BGC_2)
-allDat <- allDat %>% filter(grepl('^CWH|^CDF|MH|IDFww|CMA', BGC)) 
-allDat <- allDat %>% filter(!grepl('_', BGC)) 
+allDat <- fread("./inputs/climr_WNA_v13_5km.csv", data.table = FALSE, stringsAsFactors = FALSE) %>% mutate(BGC = BGC_2)
+#allDat <- allDat %>% filter(grepl('^CWH|^CDF|MH|IDFww|CMA', BGC)) 
+#allDat <- allDat %>% filter(!grepl('_', BGC)) 
 #allDat <- fread("./inputs/climr_WNAv12_5kmgrid.csv", data.table = FALSE, stringsAsFactors = FALSE)
 
 
@@ -270,7 +270,7 @@ gt::gt(all_cmd2,
         table.font.weight = "bold")
 
 saveRDS(all_cmd, file = "./outputs/rSMR_aSMR_ModelGrid.rds")
-
+fwrite(all_cmd, file = "./outputs/WNAv13_rSMR_aSMR_ModelGrid.csv")
 ```
 
 
