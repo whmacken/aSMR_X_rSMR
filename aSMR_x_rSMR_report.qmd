@@ -36,6 +36,7 @@ require(ggplot2)
 require (ggthemes)
 require(tidyverse)
 require(data.table)
+require()
 # require (reshape)
 # require(reshape2)
 # require(gridExtra)
@@ -60,25 +61,20 @@ This script represents a process to both complete the rSMR x aSMR matrix for con
 `#show figure: set block(breakable: true)`{=typst}
 
 ```{r import tables, echo=FALSE, message = FALSE, warning=FALSE}
-###Climate data 1961-90for representative points per BGC  with all variables# allDat <- fread("./inputs/ALLBGC_AllVars.csv", data.table = FALSE, stringsAsFactors = FALSE)
-allDat <- fread("./inputs/climr_WNA_v13_5km.csv", data.table = FALSE, stringsAsFactors = FALSE) %>% mutate(BGC = BGC_2)
-#allDat <- allDat %>% filter(grepl('^CWH|^CDF|MH|IDFww|CMA', BGC)) 
-#allDat <- allDat %>% filter(!grepl('_', BGC)) 
-#allDat <- fread("./inputs/climr_WNAv12_5kmgrid.csv", data.table = FALSE, stringsAsFactors = FALSE)
-
-
-CMDtemp <- allDat[,grep("CMD",colnames(allDat))]
+allDat <- fread("./inputs/BC_BGC_climr.csv") %>% as.data.table
+#CMDtemp <- allDat[,grep("^CMD",colnames(allDat))]
+CMDtemp <- allDat %>% select("CMD")
 AllBGC <- unique(allDat$BGC) %>% data.frame() %>% pull()
 #fwrite(AllBGC, "./inputs/Coast_BGCs.csv")
 # ###work on checking for excess summer precip in all month leading to Moist aSMR zonal sites
 #temp2 <- allDat[,grep("PPT0", colnames(allDat))]
-sPPTtemp <- allDat[c("zone", "BGC", "PPT_05","PPT_06","PPT_07","PPT_08","PPT_09" )]
-sPPTtemp$Moist <- rowSums(sPPTtemp[,3:7] >90) #count of months with >90mm rain
+sPPTtemp <- allDat %>% select("BGC", "PPT_05","PPT_06","PPT_07","PPT_08","PPT_09" )
+sPPTtemp$Moist <- rowSums(sPPTtemp[,2:6] >90) #count of months with >90mm rain
 temp3 <- sPPTtemp %>% select(BGC,Moist) %>% group_by (BGC) %>% summarize (count= length(BGC), moistcount = length(BGC[Moist == 5]), ratio = moistcount/count)# %>% # %>% moistcount = nrow (ID2 [temp2$ID2 == 5])#filter(Moist == 5) %>% count(ID2, sort =TRUE) %>% 
 #table(temp3)
 sPPTtemp$Moist <- ifelse(sPPTtemp$Moist > 4, 1, 0) # flag locations where all months are >90mm rain. If all months then always overcapacity zonal soils
                      # ifelse(temp2$Moist >3, 5.5,""))
-sPPTtemp <- sPPTtemp[c("zone","BGC","Moist")]
+sPPTtemp <- sPPTtemp %>% select("BGC","Moist")
 #temp2$Moist <- as.integer(temp2$Moist) %>% replace_na(0)
 
 #temp2 <- temp2[temp2$Moist != "",] # only those points calculated to be moist
@@ -268,7 +264,8 @@ gt::gt(all_cmd2,
          column_labels.font.weight = "bold",
         table.font.size = 12,
         table.font.weight = "bold")
-
+all_cmd.coast <- all_cmd %>% rownames_to_column("BGC") %>%  filter(grepl("^(CDF|CMA|CWH|MH|IDFww|ICHun|ESSFun1|MSun)", BGC))
+fwrite(all_cmd.coast, file = "./outputs/asmr_x_rsmr_Coast.csv")
 saveRDS(all_cmd, file = "./outputs/rSMR_aSMR_ModelGrid.rds")
 fwrite(all_cmd, file = "./outputs/WNAv13_rSMR_aSMR_ModelGrid.csv")
 ```
@@ -383,8 +380,8 @@ Note: only where old and new BGCs are the same.
 #| warning: false
 #| fig-align: "center"
 # colnames(rSMRListexp) <- c("BGC", "rSMR", "aSMRE")
-exp.asmr <- expGrid %>% filter(BGC %in% all_cmd$BGC)
-cmd.asmr <- all_cmd %>% filter(BGC %in% exp.asmr$BGC)
+exp.asmr <- expGrid %>% filter(BGC %in% all_cmd$BGC) %>% data.table
+cmd.asmr <- all_cmd %>% filter(BGC %in% exp.asmr$BGC)%>% data.table
 rSMR.exp <- melt(exp.asmr, id.vars= c("BGC"), variable_name = "rSMR", value.name = "aSMR.exp") %>% 
   mutate(BGC = gsub(" ", "", BGC, fixed = TRUE), variable = gsub("_Exp", "", variable, fixed = TRUE))
 rSMR.cmd <- melt(cmd.asmr, id.vars= c("BGC"), variable_name = "rSMR", value.name = "aSMR.cmd") %>% 
@@ -417,8 +414,8 @@ xlab ("Difference in aSMR Classes")+
 #| fig-cap-location: bottom
 #| warning: false
 #| fig-align: "center"
-exp.asmr <- expGrid %>% filter(BGC %in% all_aet$BGC)
-aet.asmr <- all_aet %>% filter(BGC %in% exp.asmr$BGC)
+exp.asmr <- expGrid %>% filter(BGC %in% all_aet$BGC)%>% data.table
+aet.asmr <- all_aet %>% filter(BGC %in% exp.asmr$BGC)%>% data.table
 
 rSMR.exp <- melt(exp.asmr, id.vars = c("BGC"), variable_name = "rSMR", value.name = "aSMR.exp") %>% 
   mutate(BGC = gsub(" ", "", BGC, fixed = TRUE), variable = gsub("_Exp", "", variable, fixed = TRUE))
@@ -448,11 +445,11 @@ xlab ("Difference in aSMR Classes")+
 #| fig-cap-location: bottom
 #| warning: false
 #| fig-align: "center"
-asmr_aet <- all_aet %>% filter(BGC %in% all_cmd$BGC)
-asmr_cmd <- all_cmd %>% filter(BGC %in% asmr_aet$BGC)
-rSMR.cmd <- melt(all_cmd, id.vars= c("BGC"), variable_name = "rSMR", value.name = "aSMR.cmd") %>% 
+asmr_aet <- all_aet %>% filter(BGC %in% all_cmd$BGC)%>% data.table
+asmr_cmd <- all_cmd %>% filter(BGC %in% asmr_aet$BGC)%>% data.table
+rSMR.cmd <- melt(asmr_cmd, id.vars= c("BGC"), variable_name = "rSMR", value.name = "aSMR.cmd") %>% 
   mutate(variable = gsub("_", "", variable, fixed = TRUE))
-rSMR.aet <- melt(all_aet, id.vars= c("BGC"), variable_name = "rSMR", value.name = "aSMR.aet") %>% 
+rSMR.aet <- melt(asmr_aet, id.vars= c("BGC"), variable_name = "rSMR", value.name = "aSMR.aet") %>% 
   mutate(BGC = gsub(" ", "", BGC, fixed = TRUE), variable = gsub("_AET", "", variable, fixed = TRUE))
 
 aSMRdiff <- left_join(rSMR.cmd, rSMR.aet, by = c("BGC", "variable")) %>% mutate(asmr.diff = aSMR.cmd - aSMR.aet)
