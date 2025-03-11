@@ -1,0 +1,107 @@
+---
+title: "Build_Training_Set"
+author: "WHMackenzie"
+date: "2025-03-11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE)
+#require (smotefamily)
+require(data.table)
+library(randtoolbox)
+library(tidyverse)
+library(ggplot2)
+require(sf)
+#require(caret)
+#require(ranger)
+require(climr)
+require(terra)
+require(tictoc)
+#require(PROJ)
+```
+
+```{r build grid and add elevation}
+require(tictoc)
+tic()
+wna_bgc <- st_read("D:/OneDrive - Government of BC/CommonTables/BGC_Maps/BGCv13_3.gpkg")
+wna_bgc2 <- vect("D:/OneDrive - Government of BC/CommonTables/BGC_Maps/BGCv13_3_epsg4326.gpkg")
+wna_grid <- st_make_grid(wna_bgc, cellsize = 2000, what = "centers") %>% st_transform(crs = 4326)
+#save as gpkg
+st_write(wna_grid, "./inputs/WNA_2km_grid.gpkg", append=FALSE)
+#elev <- terra::rast("D:/CommonTables/DEMs/WNA_DEM_SRT_30m.tif")
+elev <- terra::rast("D:/OneDrive - Government of BC/CommonTables/DEMs/WNA_DEM_4326_clipped.tif")
+#crs(elev)  <- "EPSG:4326"
+wna_grid2 <- vect(wna_grid)
+tmp_elev <- terra::extract(elev,wna_grid2)
+coords <- geom(wna_grid2, df = T)
+coords_only <- coords %>% dplyr::select(x,y)
+bgc_coords <- terra::extract(wna_bgc2,coords_only) %>% dplyr::select(BGC)
+coords2 <- cbind(bgc_coords, coords)# %>% tidyr::drop_na()
+## add BGC
+setDT(coords2)
+coords2[,c("part","hole","geom") := NULL]
+coords2[,elev := tmp_elev[,2]]
+coords2[,id := seq_along(elev)]
+coords2 <- coords2[!is.na(elev),]
+coords2 <- coords2[!is.na(BGC),]
+coords3 <- as.data.frame(coords2) %>% dplyr::rename(lon = x, lat = y)
+setcolorder(coords3, c("BGC","id", "lon","lat","elev"))
+fwrite(coords3, "./inputs/WNA_2km_grid_BGC.csv")
+toc()
+###260 seconds
+count_tp <- coords3 %>% dplyr::count(BGC)
+```
+
+```{r add BGC and climate data}
+coords <- fread("./inputs/WNA_2km_grid_BGC.csv")# %>% dplyr::select(-BGC)
+coords <- coords %>%
+  group_by(BGC) %>%
+  sample_n(100, replace = TRUE) %>% ungroup
+count_tp <- coords %>% dplyr::count(BGC)
+# fwrite(coords,("./inputs/WNA_2km_grid.csv"))
+# coords <- coords[!is.na(elev),]
+coords_sf <- st_as_sf(coords, coords = c("lon","lat"), crs = 4326)
+#save as geopackage to check
+#st_write(coords_sf, "./inputs/WNA_2km_grid_BGC.gpkg", append=FALSE)
+# coords_sf$elev <- NULL
+# coords_sf <- st_transform(coords_sf, 3005)
+# #
+# bgcs <- st_read("D:/CommonTables/BGC_Maps/WNA_BGC_v12_5Apr2022.gpkg")
+# 
+# coords_bgc <- st_join(coords_sf, bgcs, largest = TRUE)
+# coords_bgc <- data.table(coords_bgc[,c("id","BGC")])
+# coords_bgc[,geometry := NULL]
+# #coords_bgc <- coords_bgc[!is.na(BGC),]
+# # 
+# # #coords <- fread("WNA_2km_grid_WHM.csv")
+
+coords <- as.data.frame(coords) %>% distinct# %>% dplyr::rename(long = 1, lat = 2)
+setcolorder(coords, c("lon","lat","elev","id"))
+coords.bgc <- coords %>% dplyr::select(id, BGC, lon,lat,elev)# %>% dplyr::rename(ID = id)
+# remove duplicates
+## based on vs_final below
+tic()
+clim_vars <- climr::downscale(setDT(coords),  vars = list_vars(), 
+      cache = TRUE)
+# clim_vars <- climr::downscale(xyz=coords, obs_periods = NULL, vars = list_vars(set = c("Annual", "Seasonal")), cache = TRUE)
+toc()
+#' ## as a data.table
+#' climate_norms_hist <- downscale(
+#'   xyz = in_xyz, which_refmap = "auto",
+#'   return_refperiod = TRUE,
+#'   vars = vars,
+#'   out_spatial = FALSE, plot = "PPT"
+#' ) ## specify desired variables to plot
+clim_vars2 <- dplyr::left_join(coords.bgc, clim_vars)
+clim_vars_sf <- st_as_sf(clim_vars2, coords = c("lon","lat"), crs = 4326)
+st_write(clim_vars_sf, "./inputs/WNA_2km_grid_BGC_climr.gpkg", append=FALSE)
+setDT(clim_vars2)
+clim_vars2 <- clim_vars2[!is.nan(PPT_05),] ##lots of points in the ocean
+#clim_vars[coords_bgc, BGC := i.BGC, on = c(ID = "id")]
+clim_vars2 <- clim_vars2[!is.na(BGC),]
+fwrite(clim_vars2,"./inputs/BC_BGC_climr.csv")
+# clim_vars[,PERIOD := NULL]
+# clim_vars[,ID := NULL]
+
+```
