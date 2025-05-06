@@ -22,35 +22,35 @@ require(tictoc)
 ```
 
 ```{r build grid and add elevation}
-require(tictoc)
-tic()
-wna_bgc <- st_read("D:/OneDrive - Government of BC/CommonTables/BGC_Maps/BGCv13_3.gpkg")
-wna_bgc2 <- vect("D:/OneDrive - Government of BC/CommonTables/BGC_Maps/BGCv13_3_epsg4326.gpkg")
-wna_grid <- st_make_grid(wna_bgc, cellsize = 2000, what = "centers") %>% st_transform(crs = 4326)
-#save as gpkg
-st_write(wna_grid, "./inputs/WNA_2km_grid.gpkg", append=FALSE)
-#elev <- terra::rast("D:/CommonTables/DEMs/WNA_DEM_SRT_30m.tif")
-elev <- terra::rast("D:/OneDrive - Government of BC/CommonTables/DEMs/WNA_DEM_4326_clipped.tif")
-#crs(elev)  <- "EPSG:4326"
-wna_grid2 <- vect(wna_grid)
-tmp_elev <- terra::extract(elev,wna_grid2)
-coords <- geom(wna_grid2, df = T)
-coords_only <- coords %>% dplyr::select(x,y)
-bgc_coords <- terra::extract(wna_bgc2,coords_only) %>% dplyr::select(BGC)
-coords2 <- cbind(bgc_coords, coords)# %>% tidyr::drop_na()
-## add BGC
-setDT(coords2)
-coords2[,c("part","hole","geom") := NULL]
-coords2[,elev := tmp_elev[,2]]
-coords2[,id := seq_along(elev)]
-coords2 <- coords2[!is.na(elev),]
-coords2 <- coords2[!is.na(BGC),]
-coords3 <- as.data.frame(coords2) %>% dplyr::rename(lon = x, lat = y)
-setcolorder(coords3, c("BGC","id", "lon","lat","elev"))
-fwrite(coords3, "./inputs/WNA_2km_grid_BGC.csv")
-toc()
-###260 seconds
-count_tp <- coords3 %>% dplyr::count(BGC)
+# require(tictoc)
+# tic()
+# wna_bgc <- st_read("D:/OneDrive - Government of BC/CommonTables/BGC_Maps/BGCv13_3.gpkg")
+# wna_bgc2 <- vect("D:/OneDrive - Government of BC/CommonTables/BGC_Maps/BGCv13_3_epsg4326.gpkg")
+# wna_grid <- st_make_grid(wna_bgc, cellsize = 2000, what = "centers") %>% st_transform(crs = 4326)
+# #save as gpkg
+# st_write(wna_grid, "./inputs/WNA_2km_grid.gpkg", append=FALSE)
+# #elev <- terra::rast("D:/CommonTables/DEMs/WNA_DEM_SRT_30m.tif")
+# elev <- terra::rast("D:/OneDrive - Government of BC/CommonTables/DEMs/WNA_DEM_4326_clipped.tif")
+# #crs(elev)  <- "EPSG:4326"
+# wna_grid2 <- vect(wna_grid)
+# tmp_elev <- terra::extract(elev,wna_grid2)
+# coords <- geom(wna_grid2, df = T)
+# coords_only <- coords %>% dplyr::select(x,y)
+# bgc_coords <- terra::extract(wna_bgc2,coords_only) %>% dplyr::select(BGC)
+# coords2 <- cbind(bgc_coords, coords)# %>% tidyr::drop_na()
+# ## add BGC
+# setDT(coords2)
+# coords2[,c("part","hole","geom") := NULL]
+# coords2[,elev := tmp_elev[,2]]
+# coords2[,id := seq_along(elev)]
+# coords2 <- coords2[!is.na(elev),]
+# coords2 <- coords2[!is.na(BGC),]
+# coords3 <- as.data.frame(coords2) %>% dplyr::rename(lon = x, lat = y)
+# setcolorder(coords3, c("BGC","id", "lon","lat","elev"))
+# fwrite(coords3, "./inputs/WNA_2km_grid_BGC.csv")
+# toc()
+# ###260 seconds
+# count_tp <- coords3 %>% dplyr::count(BGC)
 ```
 
 ```{r add BGC and climate data}
@@ -82,8 +82,10 @@ coords.bgc <- coords %>% dplyr::select(id, BGC, lon,lat,elev)# %>% dplyr::rename
 # remove duplicates
 ## based on vs_final below
 tic()
-clim_vars <- climr::downscale(setDT(coords),  vars = list_vars(), 
-      cache = TRUE)
+clim_vars <- climr::downscale(setDT(coords),  vars = list_vars(), return_refperiod = TRUE, obs_periods = c("2001_2020"), obs_years = 2023, cache = TRUE)
+clim_vars <- climr::downscale(setDT(coords),  vars = list_vars(), return_refperiod = FALSE, obs_years = 2021, cache = TRUE)
+# clim_vars <- climr::downscale(xyz=coords, obs_periods = NULL, vars = list_vars(set = c("Annual", "Seasonal")), cache = TRUE)                                                 
+clim_vars_base <- climr::downscale(setDT(coords),  vars = list_vars(),cache = TRUE)
 # clim_vars <- climr::downscale(xyz=coords, obs_periods = NULL, vars = list_vars(set = c("Annual", "Seasonal")), cache = TRUE)
 toc()
 #' ## as a data.table
@@ -94,6 +96,7 @@ toc()
 #'   out_spatial = FALSE, plot = "PPT"
 #' ) ## specify desired variables to plot
 clim_vars2 <- dplyr::left_join(coords.bgc, clim_vars)
+clim_vars_base <- dplyr::left_join(coords.bgc, clim_vars_base)
 clim_vars_sf <- st_as_sf(clim_vars2, coords = c("lon","lat"), crs = 4326)
 st_write(clim_vars_sf, "./inputs/WNA_2km_grid_BGC_climr.gpkg", append=FALSE)
 setDT(clim_vars2)
@@ -105,3 +108,14 @@ fwrite(clim_vars2,"./inputs/BC_BGC_climr.csv")
 # clim_vars[,ID := NULL]
 
 ```
+```{r}
+# ggplot boxplot of CMD by BGC for each PERIOD
+climate_vars <- clim_vars_base %>% dplyr::select(BGC, PERIOD, CMD) %>% filter(startsWith(BGC, "I"))
+
+ggplot(climate_vars, aes(x = BGC, y = CMD, fill = PERIOD)) +
+  geom_boxplot(position = position_dodge(width = 0.8)) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "CMD by BGC", x = "BGC", y = "CMD")
+
+```
+

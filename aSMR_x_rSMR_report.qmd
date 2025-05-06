@@ -58,6 +58,8 @@ source("_3Dbarplot_Function.R")
 The biogeoclimatic ecosystem classification (BEC) system uses relative soil moisture and nutrient regime to frame environmental differences between site series within an area of similar regional climate (biogeoclimatic subzone/variants). Relative soil moisture regime classes are defined from site and soils characteristics into nine classes representing an ordinal ranking of site conditions from the driest site conditions (very xeric: rSMR 0) to the wettest terrestrial conditions on the landscape (hydric: rSMR 8). The assessment of rSMR is independent of the regional climate: the site conditions descibing xeric site is the same in all biogeoclimatic units (BGCs). This feature allows ecological characteristics of different BGCs to be compared aligning similar site and soils conditions. The site and soils conditions describing mesic relative soil moistures (rSMR 4) (and mesotrophic nutrient status) are considered to be those sites that best reflect regional climatic conditions and are said to be the **zonal site**. The mature ecosystem that occupies this relative position in a BGC is the zonal ecosystem and the vegetation composition differences between different zonal ecosystems used to define a hierarchy of bioclimatic similarity. However, for some purposes such as defining the water balance relationships for a species, quantifying the actual soil moisture is required. Direct quantitative measurement of ecologically important soil moisture requires multi-year and multi-depth monitoring to be effective. However, due to technological and cost limitations few studies have been undertaken to quantify soil moisture status of site series. The high diversity of climatic and site conditions in the province means that quantitative measurement across a representative set of environmental and ecosystem conditions is untenable. In response to this, Klinka (1989;2000) proposed a classification system for defining actual soil moisture regime based broader approximations on the ratio of actual to potential evaporation and the number of months in deficit. {insert table} Regional Ecologists created a rSMR x aSMR grid for all mapped BGCs in 1990 using Klinka's first approximation (1989). This matrix was built primarily interpretation of the actual soil moisture indicator status of the plant species occurring on each rSMR position. Some variation in the interpretation of this plant community - soil moisture relationship between experts and regions occurred and it represented only 129 of the 216 currently recognized biogeoclimatic units. 
 This script represents a process to both complete the rSMR x aSMR matrix for contemporary BGCs and provide a objective comparison between expert assigned aSMR ranking using both a climate model approach and a species indicator approach. The climate model approach uses a climate moisture deficit (CMD) derived from the climr climate surface to match the range of CMD which best matches the aSMR of the expert tables. CMD off-sets for each RSMR class are then assigned. The aSMR of a site is a function of climatic precipitation inputs and site used to assign aSMR classes to each BGC. The species indicator approach uses the expert assigned aSMR classes to assign aSMR classes to each BGC. The two approaches are then compared to identify differences in the aSMR classes assigned to each BGC.
 
+Drought tool assignments of aSMR classes for rSMR 4 and drier sites are then compared to both expert and CMD assigned aSMR classes.
+
 `#show figure: set block(breakable: true)`{=typst}
 
 ```{r import tables, echo=FALSE, message = FALSE, warning=FALSE}
@@ -76,7 +78,8 @@ sPPTtemp$Moist <- ifelse(sPPTtemp$Moist > 4, 1, 0) # flag locations where all mo
                      # ifelse(temp2$Moist >3, 5.5,""))
 sPPTtemp <- sPPTtemp %>% select("BGC","Moist")
 #temp2$Moist <- as.integer(temp2$Moist) %>% replace_na(0)
-
+moist.multiply <- temp3 %>% select(BGC, ratio) %>% mutate(multiplier = 1+ratio) %>% data.table
+allDat[moist.multiply, CMD := CMD * multiplier, on = "BGC"]
 #temp2 <- temp2[temp2$Moist != "",] # only those points calculated to be moist
 #####################################
 wPPTtemp <- allDat[,c("BGC","PPT_at","PPT_wt","PAS")]
@@ -84,7 +87,7 @@ allDat2 <- cbind(wPPTtemp,CMDtemp)
 #allDat <- cbind(wPPTtemp,sPPTtemp[c("Moist")])
 #allDat <- cbind(allDat,temp,temp2) ### use this one if Moist indicator is completed above
 allDat2$PPT.dorm <- allDat2$PPT_at + allDat2$PPT_wt
- cmd <- aggregate( . ~ BGC, allDat2, mean) ##
+ cmd <- aggregate( . ~ BGC, allDat2, mean)
 # Moist <- aggregate(ID1 ~ ID2 + Moist, temp2, length) # count of number of sites in each BGC meeting moist criteria
 
 # ##--------BGCs requiring special adjustments for deep snowpack
@@ -116,14 +119,69 @@ colnames(CMD) <- c("BGC","rSMR4","rSMR5","rSMR6","rSMR7")
 CMD <- CMD[,c(1,3:5,2)]
 
 ###for each drier rSMR, previous CMD + 100
-for (i in 1:4){
-  CMD[,length(CMD)+1] <- CMD[,length(CMD)] + 125
+# for (i in 1:4){
+#   CMD[,length(CMD)+1] <- (CMD[,length(CMD)] + 50)*1.1
+# }
+for (i in 1:4) {
+  CMD[, length(CMD) + 1] <- CMD[, length(CMD)] + 125
 }
+
 colnames(CMD)[6:9] <- c("rSMR3","rSMR2","rSMR1","rSMR0")
 
 CMD <- CMD[,order(colnames(CMD))]## creates full grid of CMD values by BGC by rSMR class
 CMD <- CMD %>% filter(BGC %in% AllBGC) ## only those BGCs in the modelled set
-write.csv (CMD, "./outputs/CMD_by_rSMR.csv")
+write.csv (CMD, "./outputs/CMD_by_rSMR_matrix.csv")
+
+rsmr_cmd.long <- CMD %>% pivot_longer(cols = -"BGC", names_to = "mean.rSMR", values_to = "CMD.site")
+fwrite(rsmr_cmd.long, file = "./outputs/meanCMD_by_rSMR_long.csv")
+
+rules <- read.csv("./inputs/aSMR_Rules_HalfStep_v12_31Oct2024.csv")
+#rules <- read.csv("./inputs/aSMR_Rules_HalfStep_v12_1May2025.csv")
+BGC.rain <- fread("./inputs/Coast_freq_rain_BGCs.csv") %>% filter(freq_rain %in% "y") %>% pull(bgc)
+aSMRClass <- function(x) {
+  for (i in seq_along(ruleSelect$CMD)) {
+    if (i < length(ruleSelect$CMD) && x <= ruleSelect$CMD[i+1]) {
+      return(ruleSelect$aSMR[i])
+    }
+  }
+  return(x)
+}
+
+# Initialize an empty data.frame to accumulate results
+all_cmd <- data.frame()
+#i=1
+for (i in seq_along(CMD$BGC)) {
+  CMD.bgc <- CMD[i,]
+  test <- foreach(SMR = colnames(CMD.bgc)[-1], .combine = cbind) %do% {
+    temp <- CMD.bgc %>% select(!!as.name(SMR))
+    temp[is.na(temp)] <- 0
+    
+    if (SMR == "rSMR7") {
+      ruleSelect <- rules[rules$SMRLevel == 7, -1]
+    } else if (SMR == "rSMR6") {
+      ruleSelect <- rules[rules$SMRLevel == 6, -1]
+    } else if (SMR == "rSMR5") {
+      ruleSelect <- rules[rules$SMRLevel == 5, -1]
+    } else {
+      ruleSelect <- rules[rules$SMRLevel == 0, -1]
+    }
+    
+    out <- sapply(temp, FUN = aSMRClass)
+    out
+  }
+  
+  bgc <- as.data.frame(test)
+  row.names(bgc) <- CMD.bgc$BGC
+  colnames(bgc) <- c("rSMR_0", "rSMR_1", "rSMR_2", "rSMR_3", "rSMR_4", "rSMR_5", "rSMR_6", "rSMR_7")
+  
+  # Accumulate the test data into all_tests
+  all_cmd <- rbind(all_cmd, bgc)
+}
+all_cmd <- all_cmd %>% rownames_to_column(var = "BGC")
+fwrite (all_cmd, "./outputs/CMDcalc_aSMR_by_rSMR_matrix.csv")
+
+rsmr_asmr.long <- all_cmd %>% pivot_longer(cols = -"BGC", names_to = "rSMR", values_to = "aSMR")
+fwrite(rsmr_asmr.long, file = "./outputs/aSMR_by_rSMR_long.csv")
 ```
 
 ### Range of Climatic Moisture Deficit for Expert Assigned aSMR Class of Zonal Sites
@@ -210,7 +268,8 @@ gt::gt(expGrid,
 #| label: asmr-CMD-model
 #| warning: false
 #| tbl-align: "left"
-rules <- read.csv("./inputs/aSMR_Rules_HalfStep_v12_31Oct2024.csv") ### import rules on range of CMD which equates to aSMR
+#rules <- read.csv("./inputs/aSMR_Rules_HalfStep_v12_1May2025.csv") ### import rules on range of CMD which equates to aSMR
+rules <- read.csv("./inputs/aSMR_Rules_HalfStep_v12_31Oct2024.csv")
 BGC.rain <- fread("./inputs/Coast_freq_rain_BGCs.csv") %>% filter(freq_rain %in% "y") %>% pull(bgc)
 aSMRClass <- function(x) {
   for (i in seq_along(ruleSelect$CMD)) {
@@ -251,6 +310,11 @@ for (i in seq_along(CMD$BGC)) {
   # Accumulate the test data into all_tests
   all_cmd <- rbind(all_cmd, bgc)
 }
+
+```
+
+
+```{r convert CMD ranges to aSMR classes, echo=FALSE, message = FALSE, warning=FALSE}
 all_cmd2 <- all_cmd
 colnames(all_cmd2 ) <- c("rSMR0", "rSMR1", "rSMR2", "rSMR3", "rSMR4", "rSMR5", "rSMR6", "rSMR7")
 gt::gt(all_cmd2,
@@ -266,6 +330,7 @@ gt::gt(all_cmd2,
         table.font.weight = "bold")
 all_cmd.coast <- all_cmd %>% rownames_to_column("BGC") %>%  filter(grepl("^(CDF|CMA|CWH|MH|IDFww|ICHun|ESSFun1|MSun)", BGC))
 fwrite(all_cmd.coast, file = "./outputs/asmr_x_rsmr_Coast.csv")
+all_cmd <- all_cmd %>% rownames_to_column(var = "BGC")
 saveRDS(all_cmd, file = "./outputs/rSMR_aSMR_ModelGrid.rds")
 fwrite(all_cmd, file = "./outputs/WNAv13_rSMR_aSMR_ModelGrid.csv")
 ```
@@ -279,7 +344,7 @@ DRT <- DRT %>% filter(BGC %in% AllBGC)
 
 rules <- read.csv("./inputs/AET_Rules_HalfStep_v12_30Oct2024.csv") ### import rules on range of CMD which equates to aSMR
 aSMRClass <- function(x) {
-  for (i in seq_along(ruleSelect$AET)) {
+  for (i in seq_along(ruleSelect$AET))  {
     if (i < length(ruleSelect$AET) && x <= ruleSelect$AET[i+1]) {
       return(ruleSelect$aSMR[i])
     }
@@ -320,6 +385,7 @@ gt::gt(all_aet,
         table.font.weight = "bold")
   all_aet <- all_aet %>% rownames_to_column(var = "BGC")
 saveRDS(all_aet, file = "./outputs/rSMR_aSMR_DroughtModel.rds")
+fwrite(all_aet, file = "./outputs/rSMR_aSMR_DroughtModel.csv")
 ```
 
 
@@ -352,7 +418,8 @@ saveRDS(all_aet, file = "./outputs/rSMR_aSMR_DroughtModel.rds")
 #| fig-cap-location: bottom
 #| warning: false
 #| fig-align: "center"
-all_cmd <- all_cmd %>% rownames_to_column(var = "BGC")
+all_cmd <- all_cmd #%>% rownames_to_column(var = "bgc")
+CMD <- CMD 
 CMDrange <- merge(CMD, all_cmd, by = "BGC")
 CMDrange$rSMR_4 <- as.factor(CMDrange$rSMR_4)
 CMDrange$BGC <- as.factor(CMDrange$BGC)
@@ -470,3 +537,4 @@ aSMRdiff <-aSMRdiff %>% mutate(not.sig.diff = between(asmr.diff, -0.5, .5)
 # ggsave("./outputs/aSMR difference expert_climate by rSMR.pdf", plot = dr, dpi = "print", device = "pdf", width = 15, height = 15, units = "in")
 # dev.off()
 ```
+
