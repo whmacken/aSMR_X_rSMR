@@ -1,0 +1,293 @@
+---
+title: "Prep for tree drought"
+author: "WHMackenzie"
+date: "2025-05-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+require(foreach)
+require(ggplot2)
+require (ggthemes)
+require(tidyverse)
+require(data.table)
+```
+
+Prep data for the tree drought model. 
+
+```{r import tables, echo=FALSE, message = FALSE, warning=FALSE}
+allDat <- fread("./inputs/BC_BGC_climr.csv") %>% as.data.table %>% drop_na() #%>% filter(PERIOD == "1961-1990")
+#CMDtemp <- allDat[,grep("^CMD",colnames(allDat))]
+CMDtemp <- allDat %>% select("CMD")
+AllBGC <- unique(allDat$BGC) %>% data.frame() %>% pull()
+#fwrite(AllBGC, "./inputs/Coast_BGCs.csv")
+# ###work on checking for excess summer precip in all month leading to Moist aSMR zonal sites
+#temp2 <- allDat[,grep("PPT0", colnames(allDat))]
+sPPTtemp <- allDat %>% select("BGC", "PERIOD", "PPT_05","PPT_06","PPT_07","PPT_08","PPT_09" )
+sPPTtemp$Moist <- rowSums(sPPTtemp[,2:7] >90) #count of months with >90mm rain
+temp3 <- sPPTtemp %>% select(BGC,PERIOD,Moist) %>% group_by (BGC, PERIOD) %>% summarize (count= length(BGC), moistcount = length(BGC[Moist == 5]), ratio = moistcount/count)# %>% # %>% moistcount = nrow (ID2 [temp2$ID2 == 5])#filter(Moist == 5) %>% count(ID2, sort =TRUE) %>% 
+#table(temp3)
+sPPTtemp$Moist <- ifelse(sPPTtemp$Moist > 4, 1, 0) # flag locations where all months are >90mm rain. If all months then always overcapacity zonal soils
+                     # ifelse(temp2$Moist >3, 5.5,""))
+sPPTtemp <- sPPTtemp %>% select("BGC", "PERIOD", "Moist")
+#temp2$Moist <- as.integer(temp2$Moist) %>% replace_na(0)
+moist.multiply <- temp3 %>% select(BGC, PERIOD, ratio) %>% mutate(multiplier = 1+ratio) %>% data.table
+allDat[moist.multiply, CMD := CMD * multiplier, on = "BGC"]
+#temp2 <- temp2[temp2$Moist != "",] # only those points calculated to be moist
+#####################################
+wPPTtemp <- allDat[,c("BGC", "PERIOD", "PPT_at","PPT_wt","PAS")]
+allDat2 <- cbind(wPPTtemp,CMDtemp)
+#allDat <- cbind(wPPTtemp,sPPTtemp[c("Moist")])
+#allDat <- cbind(allDat,temp,temp2) ### use this one if Moist indicator is completed above
+allDat2$PPT.dorm <- allDat2$PPT_at + allDat2$PPT_wt
+cmd <- allDat2 %>%
+  group_by(BGC, PERIOD) %>%
+  summarize(across(everything(), ~ quantile(.x, probs = 0.90))) %>% ungroup
+# cmd <- allDat2 %>%
+#   group_by(BGC, PERIOD) %>%
+#   summarize(across(everything(), mean)) %>% ungroup
+# Moist <- aggregate(ID1 ~ ID2 + Moist, temp2, length) # count of number of sites in each BGC meeting moist criteria
+
+# ##--------BGCs requiring special adjustments for deep snowpack
+    BGC_Special <- fread("./inputs/BGC_Special.csv", data.table = FALSE)
+    cmd <- full_join(cmd,BGC_Special, by = c("BGC" = "BGC"))
+    cmd <- cmd %>% mutate(CMD.hot = CMD * 1.25) # 25% increase in CMD for insolation slopes (from Jackson 1966)
+    cmd <- cmd %>% mutate(CMD.cold = CMD * 0.85) # 15% decrease in CMD for cold aspect slopes
+
+  ####To adjust in zones with prolonged snowpack remove CMD from early growing season months
+    #cmd <- cmd %>% mutate(CMD = ifelse(Special == "snow", CMD_07, CMD))
+
+##-----Start of Growing season deficits 
+###adds deficit from incomplete recharge in dormant season. Estimated holding capcity of loamy soils is approximately 350mm.
+## 500m seems to be a better fit - approximates the extreme years
+## add on deficit
+    # cmd <- cmd[,c("BGC","CMD","PPT.dorm")]
+    # cmd$Def <- 500 - cmd$PPT.dorm 
+    # cmd$Def[cmd$Def < 0] <- 0 #negative values set to zero = no deficit
+
+#----------------------temporary adjustment of CMD based on vegetation analysis
+  # Adjust <- fread("CMD_adjustments.csv", data.table=getOption("datatable.fread.datatable", TRUE))## 
+  # CMD <- merge(CMD,Adjust, by.x = "ID2")
+  # CMD$CMD <- CMD$CMD + CMD$CMD_Adjust
+#----------------------
+#cmd$CMD <- cmd$CMD + cmd$Def
+```
+
+
+```{r create tables, echo=FALSE, message = FALSE, warning=FALSE}
+library(dplyr)
+library(tidyr)
+library(data.table)
+library(purrr)
+period = "1961_1990"; cmd.type = "CMD"
+create_cmd_rsmr_grid <- function(cmd, cmd.type, period, AllBGC) {
+  # Filter by PERIOD
+  CMD <- cmd %>% filter(PERIOD == period) %>% select(BGC, all_of(cmd.type))
+  
+  # Compute wetter rSMR values
+  for (i in 1:3) {
+    CMD[, 2 + i] <- CMD[, 1 + i] / 2
+  }
+
+  # Rename columns
+  colnames(CMD) <- c("BGC", "rSMR4", "rSMR5", "rSMR6", "rSMR7")
+  CMD <- CMD[, c("BGC", "rSMR7", "rSMR6", "rSMR5", "rSMR4")]
+  # Compute drier rSMR values
+  for (i in 1:4) {
+    CMD[, length(CMD) + 1] <- CMD[, length(CMD)] + 125
+  }
+
+  # Rename newly added columns
+  colnames(CMD)[6:9] <- c("rSMR3", "rSMR2", "rSMR1", "rSMR0")
+
+  # Reorder columns
+  CMD <- CMD[, c("BGC", "rSMR7", "rSMR6", "rSMR5", "rSMR4", "rSMR3", "rSMR2", "rSMR1", "rSMR0")]
+
+  # Filter by specified BGCs
+  CMD <- CMD %>% filter(BGC %in% AllBGC)
+
+  # Add cmd.type and period identifiers
+  CMD$cmd.type <- cmd.type
+  CMD$PERIOD <- period
+
+  return(CMD)
+}
+
+# Define cmd.types and extract unique PERIOD values
+cmd_types <- c("CMD", "CMD.hot", "CMD.cold")
+periods <- unique(cmd$PERIOD)
+
+# Create all combinations of cmd.type and PERIOD
+cmd_grid <- expand.grid(cmd_types, periods, stringsAsFactors = FALSE)
+colnames(cmd_grid) <- c("cmd_type", "period")
+
+# Apply function iteratively
+rsmr_cmd_list <- pmap(cmd_grid, ~ create_cmd_rsmr_grid(cmd, .x, .y, AllBGC))
+
+# Combine results
+rsmr_cmd <- bind_rows(rsmr_cmd_list)
+
+# Convert to long format
+rsmr_cmd_long <- rsmr_cmd %>%
+  pivot_longer(cols = -c("BGC", "cmd.type", "PERIOD"), names_to = "rSMR", values_to = "CMD.site") %>%
+  ungroup() %>%
+  data.table()# %>%
+  #select(-cmd.type)
+
+# Save as CSV if needed
+fwrite(rsmr_cmd_long, file = "./outputs/CMD_by_rSMR_long_with_periods.csv")
+```
+
+```{r}
+## Load BGC rain classification
+# BGC.rain <- fread("./inputs/Coast_freq_rain_BGCs.csv") %>%
+#   filter(freq_rain %in% "y") %>%
+#   pull(bgc)
+
+rsmr_cmd_long <- fread(file = "./outputs/CMD_by_rSMR_long_with_periods.csv")
+# Load rules
+rules <- read.csv("./inputs/aSMR_Rules_HalfStep_v12_31Oct2024.csv")
+# Convert rules to match rSMR format and ensure numeric CMD column
+rules <- rules %>%
+  mutate(rSMR = paste0("rSMR", SMRLevel),
+         CMD = as.numeric(CMD)) %>% 
+  arrange(rSMR, CMD) # Ensure sorting
+
+# Function to find the correct aSMR class
+find_aSMR <- function(cmd_value, smr_level) {
+  matched_rules <- rules %>% filter(rSMR == smr_level)
+
+  valid_row <- matched_rules %>%
+    filter(cmd_value >= CMD & cmd_value < lead(CMD)) %>%
+    slice(1)  # Take the first matching row
+
+  return(ifelse(nrow(valid_row) > 0, valid_row$aSMR, NA))
+}
+
+# Apply function to the long dataset while keeping PERIOD
+rsmr_asmr_long <- rsmr_cmd_long %>%
+  rowwise() %>%
+  mutate(aSMR = find_aSMR(CMD.site, rSMR)) %>%
+  ungroup() %>%
+  select(BGC, CMD.site, rSMR, aSMR, PERIOD, cmd.type)  # Include PERIOD
+
+# Save the results
+fwrite(rsmr_asmr_long, file = "./outputs/modelled_aSMR_by_rSMR_long.csv")
+```
+----Old Code-----
+
+
+```{r}
+# rules <- read.csv("./inputs/aSMR_Rules_HalfStep_v12_31Oct2024.csv")
+# #rules <- read.csv("./inputs/aSMR_Rules_HalfStep_v12_1May2025.csv")
+# BGC.rain <- fread("./inputs/Coast_freq_rain_BGCs.csv") %>% filter(freq_rain %in% "y") %>% pull(bgc)
+# aSMRClass <- function(x) {
+#   for (i in seq_along(ruleSelect$CMD)) {
+#     if (i < length(ruleSelect$CMD) && x <= ruleSelect$CMD[i+1]) {
+#       return(ruleSelect$aSMR[i])
+#     }
+#   }
+#   return(x)
+# }
+# # Initialize an empty data.frame to accumulate results
+# all_asmr <- data.frame()
+# cmd.type <- "CMD.cold"
+# rsmr.cmd <- rsmr.cmd.cold  %>% as.data.frame
+# CMD <- rsmr.cmd  %>% as.data.frame %>% select(-cmd.type)
+# i=1
+# for (i in seq_along(CMD$BGC)) {
+#   CMD.bgc <- CMD[i,]
+#   test <- foreach(SMR = colnames(CMD.bgc)[-1], .combine = cbind) %do% {
+#     temp <- CMD.bgc %>% select(!!as.name(SMR))
+#     temp[is.na(temp)] <- 0
+#     
+#     if (SMR == "rSMR7") {
+#       ruleSelect <- rules[rules$SMRLevel == 7, -1]
+#     } else if (SMR == "rSMR6") {
+#       ruleSelect <- rules[rules$SMRLevel == 6, -1]
+#     } else if (SMR == "rSMR5") {
+#       ruleSelect <- rules[rules$SMRLevel == 5, -1]
+#     } else {
+#       ruleSelect <- rules[rules$SMRLevel == 0, -1]
+#     }
+#     
+#     out <- sapply(temp, FUN = aSMRClass)
+#     out
+#   }
+# 
+#   bgc <- as.data.frame(test)
+#   row.names(bgc) <- CMD.bgc$BGC
+#   colnames(bgc) <- c("rSMR0", "rSMR1", "rSMR2", "rSMR3", "rSMR4", "rSMR5", "rSMR6", "rSMR7")
+#   
+#   # Accumulate the test data into all_tests
+#   all_asmr <- rbind(all_asmr, bgc)
+# }
+# all_asmr <- all_asmr %>% rownames_to_column(var = "BGC")
+# #fwrite (all_asmr, "./outputs/CMDcalc_aSMR_by_rSMR_matrix.csv")
+# rsmr_asmr.long <- all_asmr %>% pivot_longer(cols = -"BGC", names_to = "rSMR", values_to = "aSMR") %>% ungroup %>%  data.table
+# rsmr_asmr.long2 <- merge(rsmr_asmr.long, rsmr_cmd.cold.long, by = c("BGC", "rSMR"))%>% mutate(cmd.type = cmd.type) 
+# 
+# fwrite(rsmr_asmr.long2, file = paste0("./outputs/", cmd.type, "aSMR_by_rSMR_long.csv"))
+```
+
+
+```{r}
+# CMD.long <- fread("./outputs/CMDaSMR_by_rSMR_long.csv")
+# CMD.hot.long <- fread("./outputs/CMD.hotaSMR_by_rSMR_long.csv")
+# CMD.cold.long <- fread("./outputs/CMD.coldaSMR_by_rSMR_long.csv")
+# CMD.long <- bind_rows(CMD.long, CMD.hot.long, CMD.cold.long)
+# fwrite(CMD.long, "./outputs/aSMR_by_rSMR_long.csv")
+```
+
+```{r build tables, echo=FALSE, message = FALSE, warning=FALSE}
+# rules <- read.csv("./inputs/aSMR_Rules_HalfStep_v12_31Oct2024.csv")
+# #rules <- read.csv("./inputs/aSMR_Rules_HalfStep_v12_1May2025.csv")
+# BGC.rain <- fread("./inputs/Coast_freq_rain_BGCs.csv") %>% filter(freq_rain %in% "y") %>% pull(bgc)
+# aSMRClass <- function(x) {
+#   for (i in seq_along(ruleSelect$CMD)) {
+#     if (i < length(ruleSelect$CMD) && x <= ruleSelect$CMD[i+1]) {
+#       return(ruleSelect$aSMR[i])
+#     }
+#   }
+#   return(x)
+# }
+# 
+# # Initialize an empty data.frame to accumulate results
+# all_asmr <- data.frame()
+# #i=1
+# for (i in seq_along(CMD$BGC)) {
+#   CMD.bgc <- CMD[i,]
+#   test <- foreach(SMR = colnames(CMD.bgc)[-1], .combine = cbind) %do% {
+#     temp <- CMD.bgc %>% select(!!as.name(SMR))
+#     temp[is.na(temp)] <- 0
+#     
+#     if (SMR == "rSMR7") {
+#       ruleSelect <- rules[rules$SMRLevel == 7, -1]
+#     } else if (SMR == "rSMR6") {
+#       ruleSelect <- rules[rules$SMRLevel == 6, -1]
+#     } else if (SMR == "rSMR5") {
+#       ruleSelect <- rules[rules$SMRLevel == 5, -1]
+#     } else {
+#       ruleSelect <- rules[rules$SMRLevel == 0, -1]
+#     }
+#     
+#     out <- sapply(temp, FUN = aSMRClass)
+#     out
+#   }
+#   
+#   bgc <- as.data.frame(test)
+#   row.names(bgc) <- CMD.bgc$BGC
+#   colnames(bgc) <- c("rSMR0", "rSMR1", "rSMR2", "rSMR3", "rSMR4", "rSMR5", "rSMR6", "rSMR7")
+#   
+#   # Accumulate the test data into all_tests
+#   all_asmr <- rbind(all_asmr, bgc)
+# }
+# all_asmr <- all_asmr %>% rownames_to_column(var = "BGC")
+# fwrite (all_asmr, "./outputs/CMDcalc_aSMR_by_rSMR_matrix.csv")
+# 
+# rsmr_asmr.long <- all_asmr %>% pivot_longer(cols = -"BGC", names_to = "rSMR", values_to = "aSMR") %>% ungroup %>%  data.table
+# rsmr_asmr.long2 <- merge(rsmr_asmr.long, rsmr_cmd.long, by = c("BGC", "rSMR")) %>% mutate(cmd.type = cmd.type) 
+# fwrite(rsmr_asmr.long2, file = "./outputs/aSMR_by_rSMR_long.csv")
+```
+
