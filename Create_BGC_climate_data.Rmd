@@ -82,8 +82,15 @@ coords.bgc <- coords %>% dplyr::select(id, BGC, lon,lat,elev)# %>% dplyr::rename
 # remove duplicates
 ## based on vs_final below
 tic()
-clim_vars <- climr::downscale(setDT(coords),  vars = list_vars(), return_refperiod = TRUE, obs_periods = c("2001_2020"), obs_years = 2023, cache = TRUE)
-clim_vars <- climr::downscale(setDT(coords),  vars = list_vars(), return_refperiod = FALSE, obs_years = 2021, cache = TRUE)
+# clim_vars <- climr::downscale(setDT(coords),  vars = list_vars(), return_refperiod = TRUE, obs_periods = c("2001_2020"), obs_years = 2023, cache = TRUE)
+
+clim_vars <- climr::downscale(setDT(coords),  
+                              vars = list_vars(), 
+                              return_refperiod = TRUE, 
+                              obs_periods = c("2001_2020"),
+                              obs_years = 2021, 
+                              obs_ts_dataset = "cru.gpcc",
+                              cache = TRUE)
 # clim_vars <- climr::downscale(xyz=coords, obs_periods = NULL, vars = list_vars(set = c("Annual", "Seasonal")), cache = TRUE)                                                 
 clim_vars_base <- climr::downscale(setDT(coords),  vars = list_vars(),cache = TRUE)
 # clim_vars <- climr::downscale(xyz=coords, obs_periods = NULL, vars = list_vars(set = c("Annual", "Seasonal")), cache = TRUE)
@@ -103,6 +110,7 @@ setDT(clim_vars2)
 clim_vars2 <- clim_vars2[!is.nan(PPT_05),] ##lots of points in the ocean
 #clim_vars[coords_bgc, BGC := i.BGC, on = c(ID = "id")]
 clim_vars2 <- clim_vars2[!is.na(BGC),]
+clim_var2 <- clim_vars2 %>% select(-c("DATASET"))
 fwrite(clim_vars2,"./inputs/BC_BGC_climr.csv")
 # clim_vars[,PERIOD := NULL]
 # clim_vars[,ID := NULL]
@@ -110,12 +118,20 @@ fwrite(clim_vars2,"./inputs/BC_BGC_climr.csv")
 ```
 ```{r}
 # ggplot boxplot of CMD by BGC for each PERIOD
-climate_vars <- clim_vars_base %>% dplyr::select(BGC, PERIOD, CMD) %>% filter(startsWith(BGC, "I"))
+climate_vars <- clim_vars2 %>% dplyr::select(BGC, PERIOD, CMD) %>% filter(startsWith(BGC, "SB"))
 
 ggplot(climate_vars, aes(x = BGC, y = CMD, fill = PERIOD)) +
   geom_boxplot(position = position_dodge(width = 0.8)) +
   theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
-  labs(title = "CMD by BGC", x = "BGC", y = "CMD")
+  labs(title = "CMD by BGC for normal period, modern periods and a recent drought year.", x = "BGC", y = "CMD")
+
+# compare mean difference in CMD between 2001-2020 periods and 2021
+drought <- climate_vars %>% 
+  group_by(BGC, PERIOD) %>% 
+  summarise(mean_CMD = mean(CMD, na.rm = TRUE)) %>% 
+  pivot_wider(names_from = PERIOD, values_from = mean_CMD) %>% 
+  mutate(Difference = `2021` - `2001_2020`) %>% ungroup %>% 
+  arrange(desc(Difference)) %>% summarize(mean.diff = mean(Difference))
 
 ```
 

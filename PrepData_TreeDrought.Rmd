@@ -147,7 +147,7 @@ fwrite(rsmr_cmd_long, file = "./outputs/CMD_by_rSMR_long_with_periods.csv")
 
 rsmr_cmd_long <- fread(file = "./outputs/CMD_by_rSMR_long_with_periods.csv")
 # Load rules
-rules <- read.csv("./inputs/aSMR_Rules_HalfStep_v12_31Oct2024.csv")
+rules <- read.csv("./inputs/aSMR_Rules_HalfStep_v13_7May2025.csv")
 # Convert rules to match rSMR format and ensure numeric CMD column
 rules <- rules %>%
   mutate(rSMR = paste0("rSMR", SMRLevel),

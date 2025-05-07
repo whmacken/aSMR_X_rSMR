@@ -135,7 +135,7 @@ write.csv (CMD, "./outputs/CMD_by_rSMR_matrix.csv")
 rsmr_cmd.long <- CMD %>% pivot_longer(cols = -"BGC", names_to = "mean.rSMR", values_to = "CMD.site")
 fwrite(rsmr_cmd.long, file = "./outputs/meanCMD_by_rSMR_long.csv")
 
-rules <- read.csv("./inputs/aSMR_Rules_HalfStep_v12_31Oct2024.csv")
+
 #rules <- read.csv("./inputs/aSMR_Rules_HalfStep_v12_1May2025.csv")
 BGC.rain <- fread("./inputs/Coast_freq_rain_BGCs.csv") %>% filter(freq_rain %in% "y") %>% pull(bgc)
 aSMRClass <- function(x) {
@@ -269,7 +269,7 @@ gt::gt(expGrid,
 #| warning: false
 #| tbl-align: "left"
 #rules <- read.csv("./inputs/aSMR_Rules_HalfStep_v12_1May2025.csv") ### import rules on range of CMD which equates to aSMR
-rules <- read.csv("./inputs/aSMR_Rules_HalfStep_v12_31Oct2024.csv")
+rules <- read.csv("./inputs/aSMR_Rules_HalfStep_v13_7May2025.csv")
 BGC.rain <- fread("./inputs/Coast_freq_rain_BGCs.csv") %>% filter(freq_rain %in% "y") %>% pull(bgc)
 aSMRClass <- function(x) {
   for (i in seq_along(ruleSelect$CMD)) {
