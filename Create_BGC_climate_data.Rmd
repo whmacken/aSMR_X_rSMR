@@ -20,12 +20,16 @@ require(terra)
 require(tictoc)
 #require(PROJ)
 ```
-
+# Create a grid of points across the WNA BGC map and add elevation and BGC membership
+This only needs to be rerun with new version of BGC mapping
 ```{r build grid and add elevation}
-# require(tictoc)
+require(tictoc)
 # tic()
-# wna_bgc <- st_read("D:/OneDrive - Government of BC/CommonTables/BGC_Maps/BGCv13_3.gpkg")
-# wna_bgc2 <- vect("D:/OneDrive - Government of BC/CommonTables/BGC_Maps/BGCv13_3_epsg4326.gpkg")
+# #wna_bgc <- st_read("D:/OneDrive - Government of BC/CommonTables/BGC_Maps/BGCv13_3.gpkg")
+# wna_bgc <- st_read("D:/OneDrive - Government of BC/CommonTables/BGC_Maps/WNA_BGC_v13_13Nov2024_2.gpkg")
+# #wna_bgc2 <- vect("D:/OneDrive - Government of BC/CommonTables/BGC_Maps/BGCv13_3_epsg4326.gpkg")
+# #wna_bgc2 <- vect("D:/OneDrive - Government of BC/CommonTables/BGC_Maps/WNA_BGC_v13_13Nov2024_2.gpkg")
+# wna_bgc2 <- wna_bgc %>% st_transform(crs = 4326) %>% vect#("D:/OneDrive - Government of BC/CommonTables/BGC_Maps/WNA_BGC_v13_13Nov2024_2.gpkg")
 # wna_grid <- st_make_grid(wna_bgc, cellsize = 2000, what = "centers") %>% st_transform(crs = 4326)
 # #save as gpkg
 # st_write(wna_grid, "./inputs/WNA_2km_grid.gpkg", append=FALSE)
@@ -37,7 +41,8 @@ require(tictoc)
 # coords <- geom(wna_grid2, df = T)
 # coords_only <- coords %>% dplyr::select(x,y)
 # bgc_coords <- terra::extract(wna_bgc2,coords_only) %>% dplyr::select(BGC)
-# coords2 <- cbind(bgc_coords, coords)# %>% tidyr::drop_na()
+# #coords2 <- cbind(bgc_coords, coords)# %>% tidyr::drop_na()
+# coords2 <- left_join(coords, bgc_coords, by = c("geom" = "id.y")) %>% distinct(geom, .keep_all = TRUE)
 # ## add BGC
 # setDT(coords2)
 # coords2[,c("part","hole","geom") := NULL]
@@ -45,14 +50,14 @@ require(tictoc)
 # coords2[,id := seq_along(elev)]
 # coords2 <- coords2[!is.na(elev),]
 # coords2 <- coords2[!is.na(BGC),]
-# coords3 <- as.data.frame(coords2) %>% dplyr::rename(lon = x, lat = y)
-# setcolorder(coords3, c("BGC","id", "lon","lat","elev"))
+# coords3 <- as.data.frame(coords2) %>% dplyr::rename(lon = x, lat = y) %>% select(BGC, id, lon, lat, elev)
+# #setcolorder(coords3, c("BGC","id", "lon","lat","elev"))
 # fwrite(coords3, "./inputs/WNA_2km_grid_BGC.csv")
 # toc()
 # ###260 seconds
 # count_tp <- coords3 %>% dplyr::count(BGC)
 ```
-
+# Sample 100 points from each BGC and add climate data and save to file
 ```{r add BGC and climate data}
 coords <- fread("./inputs/WNA_2km_grid_BGC.csv")# %>% dplyr::select(-BGC)
 coords <- coords %>%
@@ -88,11 +93,12 @@ clim_vars <- climr::downscale(setDT(coords),
                               vars = list_vars(), 
                               return_refperiod = TRUE, 
                               obs_periods = c("2001_2020"),
-                              obs_years = 2021, 
-                              obs_ts_dataset = "cru.gpcc",
+                              obs_years = 2001:2024, 
+                              #obs_ts_dataset = "cru.gpcc",
+                              obs_ts_dataset = "mswx.blend",
                               cache = TRUE)
 # clim_vars <- climr::downscale(xyz=coords, obs_periods = NULL, vars = list_vars(set = c("Annual", "Seasonal")), cache = TRUE)                                                 
-clim_vars_base <- climr::downscale(setDT(coords),  vars = list_vars(),cache = TRUE)
+#clim_vars_base <- climr::downscale(setDT(coords),  vars = list_vars(),cache = TRUE)
 # clim_vars <- climr::downscale(xyz=coords, obs_periods = NULL, vars = list_vars(set = c("Annual", "Seasonal")), cache = TRUE)
 toc()
 #' ## as a data.table
@@ -103,7 +109,7 @@ toc()
 #'   out_spatial = FALSE, plot = "PPT"
 #' ) ## specify desired variables to plot
 clim_vars2 <- dplyr::left_join(coords.bgc, clim_vars)
-clim_vars_base <- dplyr::left_join(coords.bgc, clim_vars_base)
+#clim_vars_base <- dplyr::left_join(coords.bgc, clim_vars_base)
 clim_vars_sf <- st_as_sf(clim_vars2, coords = c("lon","lat"), crs = 4326)
 st_write(clim_vars_sf, "./inputs/WNA_2km_grid_BGC_climr.gpkg", append=FALSE)
 setDT(clim_vars2)
@@ -111,27 +117,66 @@ clim_vars2 <- clim_vars2[!is.nan(PPT_05),] ##lots of points in the ocean
 #clim_vars[coords_bgc, BGC := i.BGC, on = c(ID = "id")]
 clim_vars2 <- clim_vars2[!is.na(BGC),]
 clim_var2 <- clim_vars2 %>% select(-c("DATASET"))
-fwrite(clim_vars2,"./inputs/BC_BGC_climr.csv")
+fwrite(clim_vars2,"./inputs/WNA_BGC_climr.csv")
 # clim_vars[,PERIOD := NULL]
 # clim_vars[,ID := NULL]
 
 ```
+# Box plot comparing CMD by BGC for each PERIOD
 ```{r}
+clim_vars2 <- fread("./inputs/WNA_BGC_climr.csv")
 # ggplot boxplot of CMD by BGC for each PERIOD
-climate_vars <- clim_vars2 %>% dplyr::select(BGC, PERIOD, CMD) %>% filter(startsWith(BGC, "SB"))
+climate_vars <- clim_vars2 %>% dplyr::select(BGC, PERIOD, CMD) %>% filter(startsWith(BGC, "SB"), PERIOD %in% c("1961_1990", "2001_2020", "2021")) %>%
+  mutate(PERIOD = factor(PERIOD, levels = c("1961_1990","2001_2020", "2021"))) %>%
+  mutate(BGC = factor(BGC, levels = unique(BGC)))
 
 ggplot(climate_vars, aes(x = BGC, y = CMD, fill = PERIOD)) +
   geom_boxplot(position = position_dodge(width = 0.8)) +
   theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
-  labs(title = "CMD by BGC for normal period, modern periods and a recent drought year.", x = "BGC", y = "CMD")
+  labs(title = "", x = "BGC", y = "CMD")
 
 # compare mean difference in CMD between 2001-2020 periods and 2021
-drought <- climate_vars %>% 
+ climate_vars %>% 
   group_by(BGC, PERIOD) %>% 
   summarise(mean_CMD = mean(CMD, na.rm = TRUE)) %>% 
   pivot_wider(names_from = PERIOD, values_from = mean_CMD) %>% 
   mutate(Difference = `2021` - `2001_2020`) %>% ungroup %>% 
   arrange(desc(Difference)) %>% summarize(mean.diff = mean(Difference))
+ggsave("./outputs/CMD_comparison_boxplot_droughtprone.png", width = 10, height = 6, dpi = 300)
 
 ```
+```{r}
+clim_vars2 <- fread("./inputs/WNA_BGC_climr.csv")
+# ggplot boxplot of CMD by BGC for each PERIOD
+climate_vars <- clim_vars2 %>% dplyr::select(BGC, PERIOD, CMD, PPT_wt, PPT_at) %>% filter(startsWith(BGC, "SBSdw3"), !PERIOD %in% c("1961_1990", "2001_2020")) %>% 
+  dplyr::arrange(BGC, PERIOD) %>%
+  dplyr::group_by(BGC) %>%
+  dplyr::mutate(PPT_dorm = PPT_wt + dplyr::lag(PPT_at)) %>%
+  dplyr::ungroup()
 
+median.2021 <- climate_vars %>% filter(PERIOD == "2021") %>% summarise(median_2021 = median(CMD, na.rm = TRUE)) %>% pull(median_2021)
+ggplot(climate_vars, aes(x = PERIOD, y = CMD, fill = PERIOD)) +
+  geom_boxplot(position = position_dodge(width = 0.8)) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  geom_hline(yintercept = median.2021, linetype = "dashed", color = "red") +
+  labs(title = "", x = "Year", y = "CMD")
+
+median.CMD <- climate_vars %>% group_by(BGC, PERIOD) %>% summarise(median_CMD = median(CMD, na.rm = TRUE)) %>% ungroup()
+
+
+ggplot(climate_vars, aes(x = PERIOD, y = PPT_dorm, fill = PERIOD)) +
+  geom_boxplot(position = position_dodge(width = 0.8)) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  geom_hline(yintercept = 350, linetype = "dashed", color = "red") +
+  labs(title = "", x = "Year", y = "PPT_dorm")
+
+### add deficit to CMD
+cumulative.deficit <- climate_vars %>% group_by(BGC, PERIOD) %>%  summarise(CMD.def = 300 -(median(PPT_dorm, na.rm = TRUE))) %>%  arrange(BGC, PERIOD) %>%
+  group_by(BGC) %>%
+  mutate(CMD.cumulative = CMD.def + lag(CMD.def, default = 0)) %>%
+  ungroup()
+cumulative.deficit <- cumulative.deficit
+
+# %>% mutate(CMD.def = ifelse(CMD.def < 0, 0, CMD.def)) %>% ungroup()
+
+```

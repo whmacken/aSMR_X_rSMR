@@ -18,118 +18,77 @@ require(tictoc)
 
 Prep data for the tree drought model. 
 # Sample 100 points from each BGC and add climate data and save to file
-```{r add BGC and climate data}
-# coords <- fread("./inputs/WNA_2km_grid_BGC.csv")# %>% dplyr::select(-BGC)
-# coords <- coords %>%
-#   group_by(BGC) %>%
-#   sample_n(100, replace = TRUE) %>% ungroup
-# count_tp <- coords %>% dplyr::count(BGC)
-# coords_sf <- st_as_sf(coords, coords = c("lon","lat"), crs = 4326)
-# 
-# coords <- as.data.frame(coords) %>% distinct# %>% dplyr::rename(long = 1, lat = 2)
-# setcolorder(coords, c("lon","lat","elev","id"))
-# coords.bgc <- coords %>% dplyr::select(id, BGC, lon,lat,elev)# %>% dplyr::rename(ID = id)
-# # remove duplicates
-# tic()
-# clim_vars <- climr::downscale(setDT(coords),  
-#                               vars = list_vars(), 
-#                               return_refperiod = TRUE, 
-#                               obs_periods = c("2001_2020"),
-#                               obs_years = 2001:2024, 
-#                               #obs_ts_dataset = "cru.gpcc",
-#                               obs_ts_dataset = "mswx.blend",
-#                               cache = TRUE, 
-#                               db_option = "local")
-# toc()
-# 
-# clim_vars2 <- dplyr::left_join(coords.bgc, clim_vars)
-# #clim_vars_base <- dplyr::left_join(coords.bgc, clim_vars_base)
-# clim_vars_sf <- st_as_sf(clim_vars2, coords = c("lon","lat"), crs = 4326)
-# st_write(clim_vars_sf, "./inputs/WNA_2km_grid_BGC_climr.gpkg", append=FALSE)
-# setDT(clim_vars2)
-# clim_vars2 <- clim_vars2[!is.nan(PPT_05),] ##lots of points in the ocean
-# #clim_vars[coords_bgc, BGC := i.BGC, on = c(ID = "id")]
-# clim_vars2 <- clim_vars2[!is.na(BGC),]
-# clim_var2 <- clim_vars2 %>% select(-c("DATASET"))
-# fwrite(clim_vars2,"./inputs/WNA_BGC_climr.csv")
-# clim_vars[,PERIOD := NULL]
-# clim_vars[,ID := NULL]
-
-```
 
 ```{r import tables, echo=FALSE, message = FALSE, warning=FALSE}
-#allDat <- fread("../BEC_Classification_Analysis/clean_data/climr_WNAv13_trainingdat.csv")
-allDat <- fread("./inputs/WNA_BGC_climr.csv") %>% as.data.table %>% drop_na() #created in Create_BGC_climate_data.Rmd
-#CMDtemp <- allDat[,grep("^CMD",colnames(allDat))]
-CMDtemp <- allDat %>% select("CMD", "CMD_07")
+# import grid points attributed to BGC and select a set
+coords <- fread("D:/OneDrive - Government of BC/CommonTables/BGCv13_3_2km_gridpts.csv")# %>% dplyr::select(-BGC)
+coords <- coords %>%
+  group_by(BGC) %>%
+  sample_n(100, replace = TRUE) %>% ungroup %>% 
+  rename(lon = xcoord, lat = ycoord)
+count_tp <- coords %>% dplyr::count(BGC)
+coords_sf <- st_as_sf(coords, coords = c("lon","lat"), crs = 4326)
+coords <- as.data.frame(coords) %>% distinct
+setcolorder(coords, c("lat", "lon","elev","id"))
+coords.bgc <- coords %>% dplyr::select(id, BGC, lon,lat,elev)
+## download climr data
+tic()
+clim_vars <- climr::downscale(setDT(coords),
+                              vars = list_vars(),
+                              return_refperiod = TRUE,
+                              obs_periods = c("2001_2020"),
+                              obs_years = 2001:2024,
+                              #obs_ts_dataset = "cru.gpcc",
+                              obs_ts_dataset = "mswx.blend",
+                              cache = TRUE,
+                              db_option = "local")
+
+allDat <- left_join(coords.bgc, clim_vars) %>% as.data.table
+fwrite(allDat, "./inputs/BGC_climate_periods.csv")
+
+CMDtemp <- allDat %>% select("CMD", "CMD_08")
 AllBGC <- unique(allDat$BGC) %>% data.frame() %>% pull()
-#fwrite(AllBGC, "./inputs/Coast_BGCs.csv")
-# ###work on checking for excess summer precip in all month leading to Moist aSMR zonal sites
-#temp2 <- allDat[,grep("PPT0", colnames(allDat))]
+
+## ID BGCs with consistent summer precipitation = less drought prone on drier rSMR than expected
+## Especially to fix hypermartime
 sPPTtemp <- allDat %>% select("BGC", "PERIOD", "PPT_05","PPT_06","PPT_07","PPT_08","PPT_09" )
-sPPTtemp$Moist <- rowSums(sPPTtemp[,2:7] >90) #count of months with >90mm rain
-temp3 <- sPPTtemp %>% select(BGC,PERIOD,Moist) %>% group_by (BGC, PERIOD) %>% summarize (count= length(BGC), moistcount = length(BGC[Moist == 5]), ratio = moistcount/count)# %>% # %>% moistcount = nrow (ID2 [temp2$ID2 == 5])#filter(Moist == 5) %>% count(ID2, sort =TRUE) %>% 
-#table(temp3)
+sPPTtemp$Moist <- rowSums(sPPTtemp[,3:7] >90) #count of growing season months with >90mm rain
+ratio.moist <- sPPTtemp %>% select(BGC, PERIOD, Moist) %>% group_by (BGC, PERIOD) %>% summarize (count= length(BGC), moistcount = length(BGC[Moist == 5]), ratio = moistcount/count)
 sPPTtemp$Moist <- ifelse(sPPTtemp$Moist > 4, 1, 0) # flag locations where all months are >90mm rain. If all months then always overcapacity zonal soils
                      # ifelse(temp2$Moist >3, 5.5,""))
 sPPTtemp <- sPPTtemp %>% select("BGC", "PERIOD", "Moist")
-#temp2$Moist <- as.integer(temp2$Moist) %>% replace_na(0)
-moist.multiply <- temp3 %>% select(BGC, PERIOD, ratio) %>% mutate(multiplier = 1+ratio) %>% data.table
-#allDat[moist.multiply, CMD := CMD * multiplier, on = "BGC"]
-#temp2 <- temp2[temp2$Moist != "",] # only those points calculated to be moist
+moist.multiply <- ratio.moist %>% select(BGC, PERIOD, ratio) %>% mutate(multiplier = 1+ratio) %>% data.table
+#allDat[moist.multiply, CMD := CMD / multiplier, on = "BGC"]
 
-
-#####################################
 wPPTtemp <- allDat[,c("BGC", "PERIOD", "PPT_at","PPT_wt","PAS")]
 allDat2 <- cbind(wPPTtemp,CMDtemp)
 #allDat <- cbind(wPPTtemp,sPPTtemp[c("Moist")])
 #allDat <- cbind(allDat,temp,temp2) ### use this one if Moist indicator is completed above
-allDat2$PPT.dorm <- allDat2$PPT_at + allDat2$PPT_wt 
-allDat2 <- allDat2 %>% filter(!is.na(PPT_at)) # add dorm ppt to CMD
-# cmd <- allDat2 %>%
-#   group_by(BGC, PERIOD) %>%
-#   summarize(across(everything(), ~ quantile(.x, probs = 0.90))) %>% ungroup
-##-----Start of Growing season deficits 
-###adds deficit from incomplete recharge in dormant season. Estimated holding capcity of loamy soils is approximately 350mm.
-## 500m seems to be a better fit - approximates the extreme years
-## add on deficit
-    allDat2<- allDat2[,c("BGC", "PERIOD", "CMD", "CMD_07", "PPT.dorm")]
-    allDat2$Def <- 350 - allDat2$PPT.dorm
-    allDat2$Def[allDat2$Def < 0] <- 0 #negative values set to zero = no deficit
-BGC_Special <- fread("./inputs/BGC_Special.csv", data.table = FALSE)
-allDat2 <- full_join(allDat2,BGC_Special, by = c("BGC" = "BGC"))
-allDat2 <- allDat2%>% mutate(CMD = ifelse(is.na(Special), CMD, CMD_07)) %>% select(-Special, -CMD_07) %>% drop_na()
-
-cmd <- allDat2 %>%
-  group_by(BGC, PERIOD) %>%
-  summarize(across(everything(), median)) %>% ungroup
-# Moist <- aggregate(ID1 ~ ID2 + Moist, temp2, length) # count of number of sites in each BGC meeting moist criteria
-
-# ##--------BGCs requiring special adjustments for deep snowpack
-    BGC_Special <- fread("./inputs/BGC_Special.csv", data.table = FALSE)
-    cmd <- full_join(cmd,BGC_Special, by = c("BGC" = "BGC"))
-    cmd <- cmd %>% mutate(CMD.hot = CMD * 1.25) # 25% increase in CMD for insolation slopes (from Jackson 1966)
-    cmd <- cmd %>% mutate(CMD.cold = CMD * 0.85) # 15% decrease in CMD for cold aspect slopes
-
+allDat2$PPT.dorm <- allDat2$PPT_at + allDat2$PPT_wt
   ####To adjust in zones with prolonged snowpack remove CMD from early growing season months
-    #cmd <- cmd %>% mutate(CMD = ifelse(Special == "snow", CMD_07, CMD))
+## BGCs with or below heavy snow packs
+BGC_Special <- fread("./inputs/BGC_Special.csv", data.table = FALSE)
+allDat2 <- left_join(allDat2,BGC_Special, by = c("BGC" = "BGC"))
+allDat2 <- allDat2 %>% mutate(CMD = ifelse(is.na(Special), CMD, CMD_08)) %>% select(-Special, -CMD_08) %>% drop_na()
 
+##-----Start of Growing season deficits 
+###adds deficit from incomplete recharge in dormant season. Estimated holding capacity of loamy soils is approximately 350mm.
+## 500m might be a better fit - approximates the extreme years
+allDat2 <- allDat2[,c("BGC", "PERIOD", "CMD","PPT.dorm")]
+allDat2$Def <- 350 - allDat2$PPT.dorm 
+allDat2$Def[allDat2$Def < 0] <- 0 #negative values set to zero = no deficit
+allDat2$CMD <- allDat2$CMD + allDat2$Def
+allDat2 <- allDat2[,c("BGC", "PERIOD", "CMD")]
 
-
-#----------------------temporary adjustment of CMD based on vegetation analysis
-  # Adjust <- fread("CMD_adjustments.csv", data.table=getOption("datatable.fread.datatable", TRUE))## 
-  # CMD <- merge(CMD,Adjust, by.x = "ID2")
-  # CMD$CMD <- CMD$CMD + CMD$CMD_Adjust
-#----------------------
-#cmd$CMD <- cmd$CMD + cmd$Def
+CMD <- allDat2 %>%
+  group_by(BGC, PERIOD) %>%
+  summarize(across(everything(), median)) %>% ungroup# CMD now equals CMD.total
+    CMD <- CMD %>% mutate(CMD.hot = CMD * 1.25) # 25% increase in CMD for insolation slopes (from Jackson 1966)
+    CMD <- CMD %>% mutate(CMD.cold = CMD * 0.85)
 ```
 
+``` {r create tables, echo=FALSE, message = FALSE, warning=FALSE}
 
-```{r create tables, echo=FALSE, message = FALSE, warning=FALSE}
-library(dplyr)
-library(tidyr)
-library(data.table)
-library(purrr)
 #period = "1961_1990"; cmd.type = "CMD"
 create_cmd_rsmr_grid <- function(cmd, cmd.type, period, AllBGC) {
   # Filter by PERIOD
@@ -166,14 +125,14 @@ create_cmd_rsmr_grid <- function(cmd, cmd.type, period, AllBGC) {
 
 # Define cmd.types and extract unique PERIOD values
 cmd_types <- c("CMD", "CMD.hot", "CMD.cold")
-periods <- unique(cmd$PERIOD)
+periods <- unique(CMD$PERIOD)
 
 # Create all combinations of cmd.type and PERIOD
 cmd_grid <- expand.grid(cmd_types, periods, stringsAsFactors = FALSE)
 colnames(cmd_grid) <- c("cmd_type", "period")
 
 # Apply function iteratively
-rsmr_cmd_list <- pmap(cmd_grid, ~ create_cmd_rsmr_grid(cmd, .x, .y, AllBGC))
+rsmr_cmd_list <- pmap(cmd_grid, ~ create_cmd_rsmr_grid(CMD, .x, .y, AllBGC))
 
 # Combine results
 rsmr_cmd <- bind_rows(rsmr_cmd_list)
@@ -184,54 +143,26 @@ rsmr_cmd_long <- rsmr_cmd %>%
   ungroup() %>%
   data.table()# %>%
   #select(-cmd.type)
-rsmr_cmd_long[moist.multiply, CMD.site := CMD.site * multiplier, on = c("BGC", "PERIOD")]
+rsmr_cmd_long[moist.multiply, CMD.site := CMD.site / multiplier, on = c("BGC", "PERIOD")]
+xx <- rsmr_cmd_long %>% filter(BGC =="MHvh")
 # Save as CSV if needed
 fwrite(rsmr_cmd_long, file = "./outputs/CMD_by_rSMR_long_with_periods.csv")
-```
 
-```{r}
-## Load BGC rain classification
-# BGC.rain <- fread("./inputs/Coast_freq_rain_BGCs.csv") %>%
-#   filter(freq_rain %in% "y") %>%
-#   pull(bgc)
-
-rsmr_cmd_long <- fread(file = "./outputs/CMD_by_rSMR_long_with_periods.csv")
-# Load rules
 rules <- read.csv("./inputs/aSMR_Rules_HalfStep_v13_23June2025.csv")
-# Convert rules to match rSMR format and ensure numeric CMD column
-rules <- rules %>%
-  mutate(#rSMR = paste0("rSMR", SMRLevel),
-         CMD = as.numeric(CMD)) %>% 
-  arrange(rSMR, CMD) # Ensure sorting
-
 rsmr_asmr_long <- rsmr_cmd_long %>%
   left_join(rules, by = "rSMR") %>%
   filter(CMD.site <= CMD) %>%
-  group_by(BGC, cmd.type, PERIOD, rSMR) %>%  # ensure row-wise logic if needed
+  group_by(BGC, PERIOD, rSMR, cmd.type) %>%  # ensure row-wise logic if needed
   slice_max(aSMR, with_ties = FALSE) %>%
-  ungroup() %>% select(BGC, CMD.site, cmd.type, PERIOD,rSMR, aSMR)
-
-# # Function to find the correct aSMR class
-# find_aSMR <- function(cmd_value, smr_level) {
-#   matched_rules <- rules %>% filter(rSMR == smr_level)
-# 
-#   valid_row <- matched_rules %>%
-#     filter(cmd_value >= CMD & cmd_value < lead(CMD)) %>%
-#     slice(1)  # Take the first matching row
-# 
-#   return(ifelse(nrow(valid_row) > 0, valid_row$aSMR, NA))
-# }
-# 
-# # Apply function to the long dataset while keeping PERIOD
-# rsmr_asmr_long <- rsmr_cmd_long %>%
-#   rowwise() %>%
-#   mutate(aSMR = find_aSMR(CMD.site, rSMR)) %>%
-#   ungroup() %>%
-#   select(BGC, CMD.site, rSMR, aSMR, PERIOD, cmd.type)  # Include PERIOD
-
-#Save the results
+  ungroup() %>% select(BGC, PERIOD, rSMR, aSMR, cmd.type)
 fwrite(rsmr_asmr_long, file = "./outputs/modelled_aSMR_by_rSMR_long.csv")# saved file used drought_prone_site.qmd
+# all_cmd <- rsmr_asmr_long   %>%
+#   arrange(BGC) %>%
+#   pivot_wider(names_from = rSMR, values_from = aSMR)
+#fwrite (all_cmd, "./outputs/CMDcalc_aSMR_by_rSMR_matrix.csv")
+
 ```
+
 ----Old Code-----
 
 

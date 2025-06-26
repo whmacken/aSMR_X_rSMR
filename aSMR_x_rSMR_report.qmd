@@ -63,7 +63,35 @@ Drought tool assignments of aSMR classes for rSMR 4 and drier sites are then com
 `#show figure: set block(breakable: true)`{=typst}
 
 ```{r import tables, echo=FALSE, message = FALSE, warning=FALSE}
-allDat <- fread("./inputs/BC_BGC_climr.csv") %>% as.data.table
+coords <- fread("D:/OneDrive - Government of BC/CommonTables/BGCv13_3_2km_gridpts.csv")# %>% dplyr::select(-BGC)
+coords <- coords %>%
+  group_by(BGC) %>%
+  sample_n(100, replace = TRUE) %>% ungroup %>% 
+  rename(lon = xcoord, lat = ycoord)
+count_tp <- coords %>% dplyr::count(BGC)
+# fwrite(coords,("./inputs/WNA_2km_grid.csv"))
+# coords <- coords[!is.na(elev),]
+coords_sf <- st_as_sf(coords, coords = c("lon","lat"), crs = 4326)
+
+coords <- as.data.frame(coords) %>% distinct# %>% dplyr::rename(long = 1, lat = 2)
+setcolorder(coords, c("lat", "lon","elev","id"))
+coords.bgc <- coords %>% dplyr::select(id, BGC, lon,lat,elev)# %>% dplyr::rename(ID = id)
+# remove duplicates
+## based on vs_final below
+tic()
+# clim_vars <- climr::downscale(setDT(coords),  vars = list_vars(), return_refperiod = TRUE, obs_periods = c("2001_2020"), obs_years = 2023, cache = TRUE)
+
+clim_vars <- climr::downscale(setDT(coords),  
+                              vars = list_vars(), 
+                              return_refperiod = TRUE, 
+                              #obs_periods = c("1961_1990"),
+                              #obs_years = 2001:2024, 
+                              #obs_ts_dataset = "cru.gpcc",
+                              #obs_ts_dataset = "mswx.blend",
+                              cache = TRUE)
+
+allDat <- left_join(coords.bgc, clim_vars) %>% as.data.table
+#allDat <- fread("./inputs/WNA_BGC_climr.csv") %>% as.data.table ## raw data from Create_BGC_climate_data.Rmd
 #CMDtemp <- allDat[,grep("^CMD",colnames(allDat))]
 CMDtemp <- allDat %>% select("CMD")
 AllBGC <- unique(allDat$BGC) %>% data.frame() %>% pull()
@@ -79,7 +107,8 @@ sPPTtemp$Moist <- ifelse(sPPTtemp$Moist > 4, 1, 0) # flag locations where all mo
 sPPTtemp <- sPPTtemp %>% select("BGC","Moist")
 #temp2$Moist <- as.integer(temp2$Moist) %>% replace_na(0)
 moist.multiply <- temp3 %>% select(BGC, ratio) %>% mutate(multiplier = 1+ratio) %>% data.table
-allDat[moist.multiply, CMD := CMD * multiplier, on = "BGC"]
+allDat[moist.multiply, CMD := CMD / multiplier, on = "BGC"]
+
 #temp2 <- temp2[temp2$Moist != "",] # only those points calculated to be moist
 #####################################
 wPPTtemp <- allDat[,c("BGC","PPT_at","PPT_wt","PAS")]
@@ -101,7 +130,7 @@ allDat2$PPT.dorm <- allDat2$PPT_at + allDat2$PPT_wt
 ###adds deficit from incomplete recharge in dormant season. Estimated holding capcity of loamy soils is approximately 350mm.
 ## 500m seems to be a better fit - approximates the extreme years
 cmd <- cmd[,c("BGC","CMD","PPT.dorm")]
-cmd$Def <- 500 - cmd$PPT.dorm 
+cmd$Def <- 350 - cmd$PPT.dorm 
 #----------------------temporary adjustment of CMD based on vegetation analysis
   # Adjust <- fread("CMD_adjustments.csv", data.table=getOption("datatable.fread.datatable", TRUE))## 
   # CMD <- merge(CMD,Adjust, by.x = "ID2")
@@ -122,9 +151,14 @@ CMD <- CMD[,c(1,3:5,2)]
 # for (i in 1:4){
 #   CMD[,length(CMD)+1] <- (CMD[,length(CMD)] + 50)*1.1
 # }
+# for (i in 1:4) {
+# #  CMD[, length(CMD) + 1] <- CMD[, length(CMD)] + 125
+# }
 for (i in 1:4) {
+  #CMD[[length(CMD) + 1]] <- CMD[[length(CMD)]] + pmin((CMD[[length(CMD)]]*2), 125)
   CMD[, length(CMD) + 1] <- CMD[, length(CMD)] + 125
 }
+
 
 colnames(CMD)[6:9] <- c("rSMR3","rSMR2","rSMR1","rSMR0")
 
@@ -132,61 +166,109 @@ CMD <- CMD[,order(colnames(CMD))]## creates full grid of CMD values by BGC by rS
 CMD <- CMD %>% filter(BGC %in% AllBGC) ## only those BGCs in the modelled set
 write.csv (CMD, "./outputs/CMD_by_rSMR_matrix.csv")
 
-rsmr_cmd.long <- CMD %>% pivot_longer(cols = -"BGC", names_to = "mean.rSMR", values_to = "CMD.site")
+rsmr_cmd.long <- CMD %>% pivot_longer(cols = -"BGC", names_to = "rSMR", values_to = "CMD")%>%
+  mutate(CMD = round(CMD, -1))
+
 fwrite(rsmr_cmd.long, file = "./outputs/meanCMD_by_rSMR_long.csv")
 
-
-#rules <- read.csv("./inputs/aSMR_Rules_HalfStep_v12_1May2025.csv")
-BGC.rain <- fread("./inputs/Coast_freq_rain_BGCs.csv") %>% filter(freq_rain %in% "y") %>% pull(bgc)
-aSMRClass <- function(x) {
-  for (i in seq_along(ruleSelect$CMD)) {
-    if (i < length(ruleSelect$CMD) && x <= ruleSelect$CMD[i+1]) {
-      return(ruleSelect$aSMR[i])
-    }
-  }
-  return(x)
-}
-
-# Initialize an empty data.frame to accumulate results
-all_cmd <- data.frame()
-#i=1
-for (i in seq_along(CMD$BGC)) {
-  CMD.bgc <- CMD[i,]
-  test <- foreach(SMR = colnames(CMD.bgc)[-1], .combine = cbind) %do% {
-    temp <- CMD.bgc %>% select(!!as.name(SMR))
-    temp[is.na(temp)] <- 0
-    
-    if (SMR == "rSMR7") {
-      ruleSelect <- rules[rules$SMRLevel == 7, -1]
-    } else if (SMR == "rSMR6") {
-      ruleSelect <- rules[rules$SMRLevel == 6, -1]
-    } else if (SMR == "rSMR5") {
-      ruleSelect <- rules[rules$SMRLevel == 5, -1]
-    } else {
-      ruleSelect <- rules[rules$SMRLevel == 0, -1]
-    }
-    
-    out <- sapply(temp, FUN = aSMRClass)
-    out
-  }
-  
-  bgc <- as.data.frame(test)
-  row.names(bgc) <- CMD.bgc$BGC
-  colnames(bgc) <- c("rSMR_0", "rSMR_1", "rSMR_2", "rSMR_3", "rSMR_4", "rSMR_5", "rSMR_6", "rSMR_7")
-  
-  # Accumulate the test data into all_tests
-  all_cmd <- rbind(all_cmd, bgc)
-}
-all_cmd <- all_cmd %>% rownames_to_column(var = "BGC")
+rules <- read.csv("./inputs/aSMR_Rules_HalfStep_v13_23June2025.csv")
+asmr.result <- rsmr_cmd.long %>%
+  left_join(rules, by = "rSMR") %>%
+  filter(CMD.x <= CMD.y) %>%
+  group_by(BGC, rSMR) %>%  # ensure row-wise logic if needed
+  slice_max(aSMR, with_ties = FALSE) %>%
+  ungroup() %>% select(BGC, rSMR, aSMR)
+#fwrite(rsmr_asmr.long, file = "./outputs/aSMR_by_rSMR_long.csv")# for use in droughtprone sites
+all_cmd <- asmr.result   %>%
+  arrange(BGC) %>%
+  pivot_wider(names_from = rSMR, values_from = aSMR)
 fwrite (all_cmd, "./outputs/CMDcalc_aSMR_by_rSMR_matrix.csv")
 
-rsmr_asmr.long <- all_cmd %>% pivot_longer(cols = -"BGC", names_to = "rSMR", values_to = "aSMR")
-fwrite(rsmr_asmr.long, file = "./outputs/aSMR_by_rSMR_long.csv")
+
+
+```
+
+
+
+```{r aSMR byrSMR classes, echo=FALSE, message = FALSE, warning=FALSE}
+all_cmd2 <- all_cmd
+colnames(all_cmd2 ) <- c("BGC", "rSMR0", "rSMR1", "rSMR2", "rSMR3", "rSMR4", "rSMR5", "rSMR6", "rSMR7")
+gt::gt(all_cmd2,
+       rownames_to_stub = FALSE) %>% 
+  gt::tab_stubhead(label = "BGC") %>%
+  gt::tab_header(
+    title = "aSMR for rSMR by BGC",
+    subtitle = "aSMR classes calculated from CMD values") %>% 
+    gt::tab_options(
+         column_labels.font.size = 12,
+         column_labels.font.weight = "bold",
+        table.font.size = 12,
+        table.font.weight = "bold")
+all_cmd.coast <- all_cmd %>%  filter(grepl("^(CDF|CMA|CWH|MH|IDFww|ICHun|ESSFun1|MSun)", BGC))
+fwrite(all_cmd.coast, file = "./outputs/asmr_x_rsmr_Coast.csv")
+#all_cmd <- all_cmd %>% rownames_to_column(var = "BGC")
+saveRDS(all_cmd, file = "./outputs/rSMR_aSMR_ModelGrid.rds")
+fwrite(all_cmd, file = "./outputs/WNAv13_rSMR_aSMR_ModelGrid.csv")
+```
+
+### Difference between modelled aSMR and the Expert crosswalk by rSMR 
+Note: only where old and new BGCs are the same. 
+
+```{r compare to expert grid, echo=FALSE, message = FALSE, warning=FALSE}
+#| label: fig-difference-cmd-expert
+#| fig-cap: "aSMR Classes from CMD Model compared to expert assessment"
+#| fig-subcap: "CMD is drier (negative) or wetter (positive)"
+#| fig-cap-location: bottom
+#| warning: false
+#| fig-align: "center"
+# colnames(rSMRListexp) <- c("BGC", "rSMR", "aSMRE")
+
+expGrid <- read.csv("./inputs/ExpertGrid_2025.csv") %>% filter(new.old != "old") %>% select(-new.old)
+expGrid$BGC <- gsub("[[:space:]]","",expGrid$BGC)
+colnames(expGrid)[-1] <- paste(colnames(expGrid)[-1],"_Exp", sep = "")
+CMDrange <- merge(CMD, expGrid, by = "BGC")
+CMDrange$rSMR4_Exp <- as.factor(CMDrange$rSMR4_Exp)
+CMDrange$BGC <- as.factor(CMDrange$BGC)
+exp.asmr <- expGrid %>% filter(BGC %in% all_cmd$BGC) %>% data.table
+cmd.asmr <- all_cmd %>% filter(BGC %in% exp.asmr$BGC)%>% data.table
+rSMR.exp <- melt(exp.asmr, id.vars= c("BGC"), variable_name = "rSMR", value.name = "aSMR.exp") %>% 
+  mutate(BGC = gsub(" ", "", BGC, fixed = TRUE), variable = gsub("_Exp", "", variable, fixed = TRUE))
+rSMR.cmd <- melt(cmd.asmr, id.vars= c("BGC"), variable_name = "rSMR", value.name = "aSMR.cmd") %>% 
+  mutate(variable = gsub("_", "", variable, fixed = TRUE))
+aSMRdiff <- left_join(rSMR.cmd, rSMR.exp, by = c("BGC", "variable")) %>% drop_na %>% mutate(asmr.diff = aSMR.cmd - aSMR.exp)
+#write.csv(aSMRdiff, "./outputs/Comparison of Modelled aSMR to Expert matrix.csv")
+aSMRdiff <-aSMRdiff %>% mutate(not.sig.diff = between(asmr.diff, -0.5, .5)
+  ) 
+aSMRdiff2 <- aSMRdiff %>% mutate(Zone = gsub("[^A-Z]", "", BGC))
+# Loop through unique BGC values and generate individual plots
+unique_zones <- unique(aSMRdiff2$Zone)
+
+for (zone in unique_zones) {
+  # Filter dataset for the current BGC
+  aSMRdiff_subset <- aSMRdiff2 %>% filter(Zone == zone)
+  
+  # Create the histogram
+  asmr.plot <- ggplot(aSMRdiff_subset, aes(asmr.diff, fill = not.sig.diff)) +
+    geom_histogram(binwidth = 0.25) +
+    facet_wrap(~ variable, nrow = 2) +
+    geom_vline(xintercept = 0, colour = "green") +
+    xlab("Difference in aSMR Classes") +
+    ylab("Count") +
+    theme_hc() +
+    ggtitle(paste0("Histogram of aSMR Differences for ", zone))
+  plot(asmr.plot)
+  # Save each plot as an image file
+  #ggsave(filename = paste0("aSMRdiff_", zone, ".png"), plot = plot, width = 8, height = 6)
+}
+# plot(dr)
+# ggsave("./outputs/aSMR difference expert_climate by rSMR.pdf", plot = dr, dpi = "print", device = "pdf", width = 15, height = 15, units = "in")
+# dev.off()
+
 ```
 
 ### Range of Climatic Moisture Deficit for Expert Assigned aSMR Class of Zonal Sites
 
-The development of a seamless climate surface for British Columnbia with Climatic Moisture Deficit presented an opportunity for linking aSMR as defined by AET/PET ratio to the climate moisture deficit. Since the zonal site is thought to best reflect climatic conditions a comparison of the CMD range reprenting each of the aSMR classes as defined in the 1990 expert grid was used to define some initial CMD ranges that represent each class. Errors in aSMR assignment and in the Climate Surface are both likley but in aggregate believed to be generally accurate. \### Boxplot of CMD ranges by expert rSMR4 class for creation of initial CMD ranges and ID of BGC outliers. A aSMR class of '5' = FRESH
+The development of a seamless climate surface for British Columbia with Climatic Moisture Deficit presented an opportunity for linking aSMR as defined by AET/PET ratio to the climate moisture deficit. Since the zonal site is thought to best reflect climatic conditions a comparison of the CMD range reprenting each of the aSMR classes as defined in the 1990 expert grid was used to define some initial CMD ranges that represent each class. Errors in aSMR assignment and in the Climate Surface are both likley but in aggregate believed to be generally accurate. \### Boxplot of CMD ranges by expert rSMR4 class for creation of initial CMD ranges and ID of BGC outliers. A aSMR class of '5' = FRESH
 
 ```{r box plot of CMD ranges by expert grid rSMR4, echo=FALSE, message = FALSE, warning=FALSE}
 #| label: fig-zonal-cmd-ranges
@@ -195,21 +277,22 @@ The development of a seamless climate surface for British Columnbia with Climati
 #| warning: false
 #| fig-align: "center"
 
-expGrid <- read.csv("./inputs/ExpertGrid_adjusted.csv")
+expGrid <- read.csv("./inputs/ExpertGrid_2025.csv") %>% filter(new.old != "old") %>% select(-new.old)
 expGrid$BGC <- gsub("[[:space:]]","",expGrid$BGC)
 colnames(expGrid)[-1] <- paste(colnames(expGrid)[-1],"_Exp", sep = "")
-CMDrange <- merge(CMD, expGrid, by = "BGC")
-CMDrange$rSMR4_Exp <- as.factor(CMDrange$rSMR4_Exp)
-CMDrange$BGC <- as.factor(CMDrange$BGC)
-
-p <- ggplot(CMDrange, aes(rSMR4_Exp, rSMR4))+
-  geom_boxplot(stat = "boxplot",  varwidth=TRUE) +
-  geom_point(shape = 23, fill = "red", size = 2)+
-  #geom_jitter(width = 0) +
-  #ggtitle("CMD of zonal sites by expert grid aSMR class")+
-  xlab ("aSMR Class of rSMR4 (zonal) sites")+
-  ylab ("CMD.total")+
-  geom_text (aes(label= BGC), size = 3, hjust = -0.5, position = position_dodge(width=5) )#
+CMD.zonal <- CMD %>% select(BGC, rSMR4)
+expGrid.zonal <- expGrid %>% select(BGC, rSMR4_Exp) %>% mutate(rSMR4_Exp= as.factor(rSMR4_Exp))
+CMDrange <- left_join(expGrid.zonal, CMD.zonal,  by = "BGC")
+#CMDrange$rSMR4_Exp <- as.factor(CMDrange$rSMR4_Exp)
+#CMDrange$BGC <- as.factor(CMDrange$BGC)
+require(ggrepel)
+ggplot(CMDrange, aes(rSMR4_Exp, rSMR4)) +
+  geom_boxplot(stat = "boxplot", varwidth = TRUE) +
+  geom_point(shape = 23, fill = "red", size = 2) +
+  xlab("aSMR Class of rSMR4 (zonal) sites") +
+  ylab("CMD.total") +
+  ggrepel::geom_text_repel(aes(label = BGC), size = 2, maxoverlaps = Inf)
+#
 ggsave("./outputs/CMD_ranges of Expert aSMR of Zonal.pdf", plot = p, dpi = "print", device = "pdf", width = 15, height = 15, units = "cm")
 ggsave("./outputs/CMD_ranges.png", plot = p, dpi = "print", device = "png", width = 15, height = 15, units = "cm")
 plot(p)
@@ -269,71 +352,52 @@ gt::gt(expGrid,
 #| warning: false
 #| tbl-align: "left"
 #rules <- read.csv("./inputs/aSMR_Rules_HalfStep_v12_1May2025.csv") ### import rules on range of CMD which equates to aSMR
-rules <- read.csv("./inputs/aSMR_Rules_HalfStep_v13_7May2025.csv")
-BGC.rain <- fread("./inputs/Coast_freq_rain_BGCs.csv") %>% filter(freq_rain %in% "y") %>% pull(bgc)
-aSMRClass <- function(x) {
-  for (i in seq_along(ruleSelect$CMD)) {
-    if (i < length(ruleSelect$CMD) && x <= ruleSelect$CMD[i+1]) {
-      return(ruleSelect$aSMR[i])
-    }
-  }
-  return(x)
-}
-
-# Initialize an empty data.frame to accumulate results
-all_cmd <- data.frame()
-#i=1
-for (i in seq_along(CMD$BGC)) {
-  CMD.bgc <- CMD[i,]
-  test <- foreach(SMR = colnames(CMD.bgc)[-1], .combine = cbind) %do% {
-    temp <- CMD.bgc %>% select(!!as.name(SMR))
-    temp[is.na(temp)] <- 0
-    
-    if (SMR == "rSMR7") {
-      ruleSelect <- rules[rules$SMRLevel == 7, -1]
-    } else if (SMR == "rSMR6") {
-      ruleSelect <- rules[rules$SMRLevel == 6, -1]
-    } else if (SMR == "rSMR5") {
-      ruleSelect <- rules[rules$SMRLevel == 5, -1]
-    } else {
-      ruleSelect <- rules[rules$SMRLevel == 0, -1]
-    }
-    
-    out <- sapply(temp, FUN = aSMRClass)
-    out
-  }
-  
-  bgc <- as.data.frame(test)
-  row.names(bgc) <- CMD.bgc$BGC
-  colnames(bgc) <- c("rSMR_0", "rSMR_1", "rSMR_2", "rSMR_3", "rSMR_4", "rSMR_5", "rSMR_6", "rSMR_7")
-  
-  # Accumulate the test data into all_tests
-  all_cmd <- rbind(all_cmd, bgc)
-}
+# rules <- read.csv("./inputs/aSMR_Rules_HalfStep_v13_7May2025_2.csv")
+# #BGC.rain <- fread("./inputs/Coast_freq_rain_BGCs.csv") %>% filter(freq_rain %in% "y") %>% pull(bgc)
+# aSMRClass <- function(x) {
+#   for (i in seq_along(ruleSelect$CMD)) {
+#     if (i < length(ruleSelect$CMD) && x <= ruleSelect$CMD[i+1]) {
+#       return(ruleSelect$aSMR[i])
+#     }
+#   }
+#   return(x)
+# }
+# 
+# # Initialize an empty data.frame to accumulate results
+# all_cmd <- data.frame()
+# #i=1
+# for (i in seq_along(CMD$BGC)) {
+#   CMD.bgc <- CMD[i,]
+#   test <- foreach(SMR = colnames(CMD.bgc)[-1], .combine = cbind) %do% {
+#     temp <- CMD.bgc %>% select(!!as.name(SMR))
+#     temp[is.na(temp)] <- 0
+#     
+#     if (SMR == "rSMR7") {
+#       ruleSelect <- rules[rules$SMRLevel == 7, -1]
+#     } else if (SMR == "rSMR6") {
+#       ruleSelect <- rules[rules$SMRLevel == 6, -1]
+#     } else if (SMR == "rSMR5") {
+#       ruleSelect <- rules[rules$SMRLevel == 5, -1]
+#     } else {
+#       ruleSelect <- rules[rules$SMRLevel == 0, -1]
+#     }
+#     
+#     out <- sapply(temp, FUN = aSMRClass)
+#     out
+#   }
+#   
+#   bgc <- as.data.frame(test)
+#   row.names(bgc) <- CMD.bgc$BGC
+#   colnames(bgc) <- c("rSMR_0", "rSMR_1", "rSMR_2", "rSMR_3", "rSMR_4", "rSMR_5", "rSMR_6", "rSMR_7")
+#   
+#   # Accumulate the test data into all_tests
+#   all_cmd <- rbind(all_cmd, bgc)
+# }
 
 ```
 
 
-```{r convert CMD ranges to aSMR classes, echo=FALSE, message = FALSE, warning=FALSE}
-all_cmd2 <- all_cmd
-colnames(all_cmd2 ) <- c("rSMR0", "rSMR1", "rSMR2", "rSMR3", "rSMR4", "rSMR5", "rSMR6", "rSMR7")
-gt::gt(all_cmd2,
-       rownames_to_stub = TRUE) %>% 
-  gt::tab_stubhead(label = "BGC") %>%
-  gt::tab_header(
-    title = "aSMR for rSMR by BGC",
-    subtitle = "aSMR classes calculated from CMD values") %>% 
-    gt::tab_options(
-         column_labels.font.size = 12,
-         column_labels.font.weight = "bold",
-        table.font.size = 12,
-        table.font.weight = "bold")
-all_cmd.coast <- all_cmd %>% rownames_to_column("BGC") %>%  filter(grepl("^(CDF|CMA|CWH|MH|IDFww|ICHun|ESSFun1|MSun)", BGC))
-fwrite(all_cmd.coast, file = "./outputs/asmr_x_rsmr_Coast.csv")
-all_cmd <- all_cmd %>% rownames_to_column(var = "BGC")
-saveRDS(all_cmd, file = "./outputs/rSMR_aSMR_ModelGrid.rds")
-fwrite(all_cmd, file = "./outputs/WNAv13_rSMR_aSMR_ModelGrid.csv")
-```
+
 
 
 ### Drought tool derived aSMR classes for all BGCs
@@ -342,7 +406,9 @@ DRT <- fread("./inputs/DroughtTool_AETxrSMR.csv") %>% filter(Period == "1961-199
 DRT <- pivot_wider(DRT, id_cols = BGC, names_from = rSMR, values_from = AET)
 DRT <- DRT %>% filter(BGC %in% AllBGC)
 
-rules <- read.csv("./inputs/AET_Rules_HalfStep_v12_30Oct2024.csv") ### import rules on range of CMD which equates to aSMR
+rules <- read.csv("./inputs/AET_Rules_HalfStep_v12_30Oct2024.csv")
+
+### import rules on range of CMD which equates to aSMR
 aSMRClass <- function(x) {
   for (i in seq_along(ruleSelect$AET))  {
     if (i < length(ruleSelect$AET) && x <= ruleSelect$AET[i+1]) {
@@ -423,55 +489,23 @@ CMD <- CMD
 CMDrange <- merge(CMD, all_cmd, by = "BGC")
 CMDrange$rSMR_4 <- as.factor(CMDrange$rSMR_4)
 CMDrange$BGC <- as.factor(CMDrange$BGC)
-p <- ggplot(CMDrange, aes(rSMR_4, rSMR4))+
-  geom_boxplot(stat = "boxplot",  varwidth=TRUE) +
-  geom_point(shape = 23, fill = "red", size = 2)+
-  #geom_jitter(width = 0) +
-  xlab ("aSMR Class of rSMR4 (zonal) sites")+
-  ylab ("CMD.total")+
-  geom_text (aes(label= BGC), size = 3, hjust = -0.5, position = position_dodge(width=5) )#
+p <- ggplot(CMDrange, aes(rSMR_4, rSMR4)) +
+  geom_boxplot(stat = "boxplot", varwidth = TRUE) +
+  geom_point(shape = 23, fill = "red", size = 2) +
+  geom_hline(yintercept = seq(0, max(CMDrange$rSMR4, na.rm = TRUE), by = 100),
+             color = "gray80", linetype = "dashed") +
+  xlab("aSMR Class of rSMR4 (zonal) sites") +
+  ylab("CMD.total") +
+  geom_text(aes(label = BGC), size = 2, hjust = -0.5,
+            position = position_dodge(width = 5))+
+  theme_few()
 # ggsave("./outputs/CMD_ranges of Expert aSMR of Zonal.pdf", plot = p, dpi = "print", device = "pdf", width = 15, height = 15, units = "cm")
 # ggsave("./outputs/CMD_ranges.png", plot = p, dpi = "print", device = "png", width = 15, height = 15, units = "cm")
 plot(p)
 
 ```
 
-### Difference between modelled aSMR and the Expert crosswalk by rSMR 
-Note: only where old and new BGCs are the same. 
 
-```{r compare to expert grid, echo=FALSE, message = FALSE, warning=FALSE}
-#| label: fig-difference-cmd-expert
-#| fig-cap: "aSMR Classes from CMD Model compared to expert assessment"
-#| fig-subcap: "CMD is drier (negative) or wetter (positive)"
-#| fig-cap-location: bottom
-#| warning: false
-#| fig-align: "center"
-# colnames(rSMRListexp) <- c("BGC", "rSMR", "aSMRE")
-exp.asmr <- expGrid %>% filter(BGC %in% all_cmd$BGC) %>% data.table
-cmd.asmr <- all_cmd %>% filter(BGC %in% exp.asmr$BGC)%>% data.table
-rSMR.exp <- melt(exp.asmr, id.vars= c("BGC"), variable_name = "rSMR", value.name = "aSMR.exp") %>% 
-  mutate(BGC = gsub(" ", "", BGC, fixed = TRUE), variable = gsub("_Exp", "", variable, fixed = TRUE))
-rSMR.cmd <- melt(cmd.asmr, id.vars= c("BGC"), variable_name = "rSMR", value.name = "aSMR.cmd") %>% 
-  mutate(variable = gsub("_", "", variable, fixed = TRUE))
-aSMRdiff <- left_join(rSMR.cmd, rSMR.exp, by = c("BGC", "variable")) %>% drop_na %>% mutate(asmr.diff = aSMR.cmd - aSMR.exp)
-#write.csv(aSMRdiff, "./outputs/Comparison of Modelled aSMR to Expert matrix.csv")
-aSMRdiff <-aSMRdiff %>% mutate(not.sig.diff = between(asmr.diff, -0.5, .5)
-  ) 
-#aSMRDiffCount2 <- aggregate(BGC ~ diff, aSMRdiff, length)
-#aSMRdiffmat <- cast(aSMRdiff, diff ~ aSMRC) #ignore message here casts to matrix
- ggplot(aSMRdiff, aes(asmr.diff, fill = not.sig.diff))+
-  geom_histogram(binwidth = .25 ) +
-  facet_wrap(~ variable, nrow = 2)+
-      geom_vline (xintercept = 0, colour = "green")+
-xlab ("Difference in aSMR Classes")+
-  ylab ("Count")+
-   theme_hc()
-
-# plot(dr)
-# ggsave("./outputs/aSMR difference expert_climate by rSMR.pdf", plot = dr, dpi = "print", device = "pdf", width = 15, height = 15, units = "in")
-# dev.off()
-
-```
 
 ### Difference between AET modelled and the Expert aSMR by BGC
 ```{r compare aet to expert grid, echo=FALSE, message = FALSE, warning=FALSE}
