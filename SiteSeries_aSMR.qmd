@@ -1,0 +1,521 @@
+---
+title: "Edatopic dimensions of Site Series"
+author: "William H MacKenzie"
+date: "04/06/2025"
+format:
+  typst:
+    toc: true
+    toc-depth: 2
+    toc-title: Contents
+    section-numbering: 1.1.1
+    columns: 1
+editor: source
+execute:
+  echo: false
+  error: false
+  warning: false
+  message: false
+  fig.width: 6
+  fig.height: 6
+  fig.align: 'center'
+  fig.cap: true
+  fig.pos: H
+  out.width: '100%'
+  dev: pdf
+  fig.ext: pdf
+  cache: false
+  fig.retina: 2
+  dpi: 600
+  fig.asp: 1.5
+  fig.path: "./figures/"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+require(foreach)
+require(ggplot2)
+require (ggthemes)
+require(tidyverse)
+require(data.table)
+library(flextable)
+require(openxlsx)
+require(gt)
+require(odbc)
+require(climr)
+```
+
+# Summary
+
+This document is intended to provide a summary of the analysis and results for the project "Identifying drought-prone sites where plantation failure without best practices can be susceptible to drought mortality under current climate conditions". The analysis has two objectives the following objectives:
+
+1.  Identifying drought-prone sites where plantation failure (without best practices) could be expected in some years under current climate normal conditions (2001-2020).
+
+2.  Provide an example for identifying site series that are likely to experience plantation failure under a drought event using climate data for the 2021 heat-dome year.
+
+I used a site-adjusted climatic moisture deficit (CMD) model to estimate aSMR values for each rSMR position in each BGC for the modern normal climate period of 2001-2020 acquired from the Climr climate surface. This model was originally built to reconstruct and extend the expert-assigned aSMR x rSMR grid for use in attributing aSMR in modern field guide edatopic grids for the 1961-1990 normal period. The model estimates aSMR values for each rSMR position and is adjusted to estimate aSMR on insolation and cold aspects and links to site series using the edatopic library file from CCISSv13. Sites that overlap with an aSMR rating of Moderately Dry are considered drought-prone.
+
+[**Abbreviations used:**]{.underline} **CMD** (climatic moisture deficit), **aSMR** (actual site moisture regime), **rSMR** (relative site moisture regime), **BGC** (biogeoclimatic zone), **SS** (site series), **CCISS** (Climate Change Informed Species Selection), **ForDrat** (Forest Drought Model).
+
+```{r import prepped data tables, echo=FALSE, message = FALSE, warning=FALSE}
+asmr.codes <- fread("./inputs/asmr_codes.csv")
+remove = c("Gg", "Ro", "Gs", "Rt", "Gb", "00", "/x", "Bb", "Br", "/Fm", "Fl") #site series to exclude from drought-prone sites
+# edatopic <- fread("./inputs/edatopic_fixed.csv") %>% 
+#   mutate(rSMR = as.numeric(substr(Edatopic, 2, 2))) %>% 
+#   filter(startsWith(Source, "BEC"))
+require(DBI) #loads odbc as well
+ becdb <- dbConnect(odbc::odbc(), .connection_string = "Driver={Microsoft Access Driver (*.mdb, *.accdb)}; DBQ=D:/OneDrive - Government of BC/BECdb_Working/BECdb_ver13_2024.accdb;")
+BGC_all <- dbReadTable(becdb, "tblBGC_UnitsWorkingandArchive") %>% 
+  filter(is.na(VersionRetired)) %>% select(FSRegion, BGC_NoSpace)
+edatopic <- dbReadTable(becdb, "Edatopic_v13_3") %>% #filter(is.na(Ignore)) %>% 
+  mutate(rSMR = paste0("rSMR", substr(Edatopic, 2, 2))) %>% 
+    mutate(SNR = substr(Edatopic, 1, 1)) %>% 
+ filter(startsWith(Source, "BEC")) %>% select(BGC, rSMR, SNR, SS_NoSpace, Edatopic) %>% distinct %>% filter(!str_detect(SS_NoSpace, paste(remove, collapse = "|")))
+dbDisconnect(becdb)
+
+# cfrg <- fread("D:/OneDrive - Government of BC/CCISSv12/latest_CCISS_tool_files/StockingStds/StockStands_v12.csv") %>%
+#   mutate(siteseries = paste0(ZoneSubzone, "/", SiteSeries)) %>% 
+#   select(siteseries, FN1, FN2, FN3, FN4, FN5, FN6) %>% 
+#   pivot_longer(cols = starts_with("FN"), names_to = "FN", values_to = "footnote") %>% filter(!is.na(footnote))
+# footnotes <- fread("D:/OneDrive - Government of BC/CCISSv12/latest_CCISS_tool_files/StockingStds/Revised Reference Guide Footnotes.csv") %>% filter(!is.na(LimitType), LimitType != "") 
+
+```
+
+# Determining drought-prone sites from a site-adjusted CMD model
+
+Two sources of information are used to determine drought-prone sites. A site-adjusted CMD model derived aSMR - rSMR relationship for each BGC and the edatope library file from CCISSv13. The steps to identify drought-prone sites are as follows:
+
+1.  aSMR for each rSMR position in each BGC estimated using a site-adjusted climatic moisture deficit (CMD) model
+
+-   A range of regional CMD values equates directly to the expert-assessed actual SMR of zonal sites. CMD can be adjusted for relative SMR position to translate the regional climatic CMD to site-level aSMR levels. This process was initially built to reconstruct and extend the expert-assigned aSMR x rSMR grid for use for attributing field guide edatopic grids with aSMR.
+
+-   We estimate the aSMR values for each rSMR position from the median CMD value of a 100 randomly chosen locations in every BGC using Climr data for the 2001-2020 (modern) normal period.
+
+-   To account for topographic effects on CMD we adjust the CMD values for insolation and cold aspects sites using approximations derived from Jackson (1966). Insolation slopes have CMD \* 1.25 and Cold aspects CMD \* 0.85. aSMR values are assigned to each these aspect classes.
+
+2.Identify drought-prone sites by aSMR
+
+-   An aSMR is assigned to each rSMR position occupied by each site series using the edatope information table from CCISSv13, which identifies all the rSMR positions overlapped by a site series.
+-   Moderately Dry aSMR (\<=3) was chosen as the threshold for designating a site series as susceptible to reforestation drought mortality based on a review of tree species limits in Klinka et al 2000, driest aSMR occurrence of species in site series, and drought management comments presented in field guides. Any site series that has a minimum aSMR at this chosen level was selected as a candidate for consideration as drought-prone. These sites would experience drought-challenged reforestation conditions in occasional years of the modern normal period. The rationale for selecting this threshold versus a more extreme aSMR is to include both more extreme locations (we used median CMD values) and to account for the expected general increase in drought conditions in the near term.
+-   A table is exported for review that lists the site series that are susceptible to drought with footnotes to identify which aspects (neutral, insolated, and/or cold aspects) are considered drought susceptible.
+
+3.  Identify additional drought-prone sites in the 2021 heat dome year
+
+-   The same approach was then applied to climate data from the 2021 heat dome year as an example of a catastrophic drought year and predictions compared to the identified modern period drought-prone sites. A comparison to actual drought mortality locations for that year should be undertaken.
+
+::: {typst}
+**Actual SMR values, codes and names**
+
+| aSMR Value | aSMR code | aSMR name       |
+|------------|-----------|-----------------|
+| 0          | XD        | Extremely dry   |
+| 1          | ED        | Excessively dry |
+| 2          | VD        | Very dry        |
+| 3          | MD        | Moderately dry  |
+
+:::
+
+```{r}
+# edatopic1 <- edatopic %>% 
+#   select(BGC, rSMR, SS_NoSpace) %>% distinct
+rsmr_cmd_long <- fread("./outputs/CMD_by_rSMR_long_with_periods.csv")
+normal_years <- rsmr_cmd_long %>%
+  filter(PERIOD %in% "1961_1990") %>%
+  group_by(BGC, rSMR, PERIOD) %>%
+  mutate(median_CMD = median(CMD.site, na.rm = TRUE)) %>% 
+  ungroup
+
+```
+
+
+```{r}
+edatopic2 <- edatopic %>%
+  mutate(rSMR = as.numeric(substr(Edatopic, 2, 2))) %>% 
+  filter(!str_detect(SS_NoSpace, paste(remove, collapse = "|"))) %>% 
+  select(BGC, rSMR, SS_NoSpace) %>% distinct
+
+rsmr_asmr.long <- fread("./outputs/modelled_aSMR_by_rSMR_long.csv") %>% 
+  mutate(rSMR = as.numeric(substr(rSMR, nchar(rSMR), nchar(rSMR))))#from PrepData_TreeDrought.Rmd
+
+rsmr_asmr.modern <- rsmr_asmr.long %>% filter(PERIOD == "2001_2020")
+rsmr_asmr.normal <- rsmr_asmr.long %>% filter(PERIOD == "1961_1990")
+rsmr_asmr.2021 <- rsmr_asmr.long %>% filter(PERIOD == "2021")
+#rsmr_asmr =rsmr_asmr.modern; period = "2001_2020"; asmr.limit = 3 
+
+id.drought.prone = function(rsmr_asmr, period, asmr.limit) {
+  # Filter for drought-prone sites
+  drought.prone <- rsmr_asmr %>% filter(PERIOD == period, aSMR <= asmr.limit) %>% left_join(edatopic2, by = c("BGC", "rSMR")) %>% distinct(SS_NoSpace, cmd.type) %>% mutate(drought = "y") %>% ungroup() %>%
+    filter(!is.na(SS_NoSpace)) %>% pivot_wider(id_cols = SS_NoSpace, names_from = cmd.type, values_from = drought) %>% arrange(SS_NoSpace) %>% replace_na(list(CMD = "ok", CMD.hot = "ok", CMD.cold = "ok")) %>% filter(!str_detect(SS_NoSpace, "Gg|Ro|Gs|Rt|Gb|00|/x|Bb|Br|/Fm|Fl")) %>% 
+    rename(
+      `SiteSeries` = SS_NoSpace,
+      `Neutral` = CMD,
+      `Insolation` = CMD.hot,
+      `CoolAspect` = CMD.cold
+    )
+  rsmr <- rsmr_asmr %>% filter(PERIOD == period, aSMR <= asmr.limit) %>% left_join(edatopic2, by = c("BGC", "rSMR")) %>% distinct(SS_NoSpace, aSMR)
+  drought.prone <- drought.prone %>% 
+    left_join(rsmr, by = c("SiteSeries" = "SS_NoSpace")) %>%
+    mutate(aSMR = ifelse(is.na(aSMR), 0, aSMR)) %>%
+    mutate(Neutral = ifelse(Neutral == "y", "y", "n"),
+           Insolation = ifelse(Insolation == "y", "y", "n"),
+           CoolAspect = ifelse(CoolAspect == "y", "y", "n")) %>%
+    mutate(Neutral = ifelse(is.na(Neutral), "n", Neutral),
+           Insolation = ifelse(is.na(Insolation), "n", Insolation),
+           CoolAspect = ifelse(is.na(CoolAspect), "n", CoolAspect)) %>%
+    mutate(SiteSeries = str_replace(SiteSeries, "_", "/"))%>%
+  group_by(SiteSeries) %>%
+  slice_max(aSMR, with_ties = FALSE) %>%
+  ungroup()
+
+  # drought.prone <- drought.prone %>% 
+  #   mutate(Neutral = ifelse(Neutral == "y", "y", "n"),
+  #          Insolation = ifelse(Insolation == "y", "y", "n"),
+  #          CoolAspect = ifelse(CoolAspect == "y", "y", "n")) %>%
+  #   mutate(Neutral = ifelse(is.na(Neutral), "n", Neutral),
+  #          Insolation = ifelse(is.na(Insolation), "n", Insolation),
+  #          CoolAspect = ifelse(is.na(CoolAspect), "n", CoolAspect)) %>%
+  #   mutate(SiteSeries = str_replace(SiteSeries, "_", "/"))
+  return(drought.prone)
+}
+drought.year = "2021"
+drought_normal <- id.drought.prone(rsmr_asmr.long, period = "1961_1990", asmr.limit = 3)
+drought_modern <- id.drought.prone(rsmr_asmr.long, period = "2001_2020", asmr.limit = 3)
+drought_year <- id.drought.prone(rsmr_asmr.long, period = drought.year, asmr.limit = 3)
+drought_all <- full_join(drought_modern, drought_year, by = "SiteSeries", suffix = c(".modern", ".drought")) %>% 
+  mutate(
+    footnote = case_when(
+      Neutral.modern == "y" & Insolation.modern == "y" & CoolAspect.modern == "y" ~ "1_dp_all",
+      Neutral.modern == "y" & Insolation.modern == "y" ~ "2_dp_not_cool",
+      Insolation.modern == "y" ~ "3_dp_only_hot",
+      TRUE ~ NA_character_
+    ),
+    footnote.drought = case_when(
+      Neutral.drought == "y" & Insolation.drought  == "y" & CoolAspect.drought  == "y" ~ "1_dp_all",
+      Neutral.drought  == "y" & Insolation.drought  == "y" ~ "2_dp_not_cool",
+      Insolation.drought  == "y" ~ "3_dp_only_hot",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  mutate(
+    event.drought = case_when(
+      is.na(footnote) ~ "non-dp siteseries affected",
+      footnote == footnote.drought  ~ "risk_unchanged",
+      TRUE ~ "risk_changed"
+    )
+  ) %>%
+  arrange(SiteSeries) %>%
+  select(SiteSeries, footnote, aSMR.modern, footnote.drought , aSMR.drought , event.drought )
+drought_all2 <- full_join(drought_all, drought_years, by = c("SiteSeries" = "SS_NoSpace")) 
+```
+
+```{r}
+require(DBI) #loads odbc as well
+ becdb <- dbConnect(odbc::odbc(), .connection_string = "Driver={Microsoft Access Driver (*.mdb, *.accdb)}; DBQ=D:/OneDrive - Government of BC/BECdb_Working/BECdb_ver13_2024.accdb;")
+BGC_all <- dbReadTable(becdb, "tblBGC_UnitsWorkingandArchive") %>% 
+  filter(is.na(VersionRetired)) %>% select(FSRegion, BGC_NoSpace)
+dbDisconnect(becdb)
+
+region.droughtss <- drought_all2 %>% mutate(BGC_NoSpace = str_extract(SiteSeries, "^[^/]+"))  %>%
+  left_join(BGC_all, by = c("BGC_NoSpace")) %>% 
+  mutate(FSRegion = ifelse(is.na(FSRegion), "Unknown", FSRegion)) %>% arrange(FSRegion, footnote, SiteSeries) %>% select(FSRegion, SiteSeries, footnote, aSMR.modern, n_modern_years_MD) %>% filter(footnote !="not_dp") %>%
+  filter(!grepl("\\.1$|\\.2$", SiteSeries)) %>% distinct
+
+counts_by_region <- region.droughtss %>% filter(footnote == "dp_all") %>% 
+  group_by(FSRegion) %>% 
+  summarise(n = n(), .groups = "drop") %>% 
+  arrange(desc(n))
+
+drought.wbk <- createWorkbook()
+regions_list <- unique(region.droughtss$FSRegion)
+
+for (region in regions_list) {
+  region_data <- region.droughtss %>% filter(FSRegion == region)
+  # Clean and truncate sheet name
+  sheet_name <- str_replace_all(region, "[\\*/\\?\\:\\[\\]]", "_")     # Replace forbidden characters
+  sheet_name <- str_sub(sheet_name, 1, 31)   
+  addWorksheet(drought.wbk, sheet_name)
+  writeData(drought.wbk, sheet = sheet_name, x = region_data)
+}
+
+# Save to file
+saveWorkbook(drought.wbk, "./outputs/prospective_droughtprone_SiteSeries.xlsx", overwrite = TRUE)
+
+```
+
+## List of drought-prone site series + aspect classes
+
+List of all site series where some aspects are expected to be drought-prone under modern climate conditions (2001-2020). The table includes the aSMR value for each site series and the footnote indicating which aspects are considered drought-prone. The footnotes are: 1_ alldp (all aspects), 2_ not_cool (neutral and insolation aspects are drought-prone), 3_ only_hot (only insolation aspect are drought-prone). The aSMR values are based on the median CMD values for the rSMR range of each BGC.
+
+`#show figure: set block(breakable: true)`{=typst}
+
+```{r  table report}
+#| tbl-cap: "Drought-prone sites"
+#| tbl-cap-location: top
+#| tbl-width: 8
+#| tbl-subtitle: "aSMR <= 3 (Moderately dry)"
+#| tbl-label: drought-event-comparison
+
+droughtprone <- region.droughtss %>% filter(footnote != "not_dp") %>% select(FSRegion, SiteSeries, footnote, aSMR.modern, n_modern_years_MD) %>% arrange(FSRegion, footnote, SiteSeries)# %>% 
+gt::gt(droughtprone) %>%
+  gt::tab_stubhead(label = "Site Series") %>% 
+  gt::tab_options(
+    column_labels.font.size = 12,
+    column_labels.font.weight = "bold",
+    table.font.size = 12,
+    table.font.weight = "bold"
+  ) #%>%
+#   gt::cols_label(
+#     SiteSeries = "Site Series",
+#     Neutral.2021 = "Neutral",
+#     Insolation.2021 = "Insolation",
+#     CoolAspect.2021 = "Cool Aspect"  
+# ) %>% gt::cols_move(columns = "Insolation", after = "SiteSeries")
+```
+
+## List of susceptibility site for the 2021 drought year
+
+Following the same methods above but applied to the single 2021 year to compare the 'normal' drought-prone sites to the drought-prone sites in the 2023 drought year. 
+
+```{r}
+#| label: fig-IDF-cmd-ranges
+#| fig-cap: "CMD ranges for IDF subzones in 3 periods"
+#| fig-cap-location: bottom
+#| warning: false
+#| fig-align: "center"
+#| 
+clim_vars2 <- fread("./inputs/BGC_climate_periods.csv")
+# ggplot boxplot of CMD by BGC for each PERIOD
+climate_vars <- clim_vars2 %>% dplyr::select(BGC, PERIOD, CMD) %>% filter(startsWith(BGC, "IDF"), PERIOD %in% c("1961_1990", "2001_2020", "2021")) %>%#, "2022","2023"
+  mutate(PERIOD = factor(PERIOD, levels = c("1961_1990","2001_2020", "2021"))) %>% #, "2022", "2023"
+  mutate(BGC = factor(BGC, levels = unique(BGC)))
+
+ggplot(climate_vars, aes(x = BGC, y = CMD, fill = PERIOD)) +
+  geom_boxplot(position = position_dodge(width = 0.8)) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "", x = "BGC", y = "CMD")
+
+```
+
+
+```{r}
+
+#| label: fig-IDFxm-cmd-ranges
+#| fig-cap: "CMD ranges for IDFxm subzone over years/periods"
+#| fig-subtitle: "Red line indicates the minimum CMD drought limit"
+#| fig-cap-location: bottom
+#| warning: false
+#| fig-align: "center"
+
+rsmr_cmd_long <- fread("./outputs/CMD_by_rSMR_long_with_periods.csv")
+climate_vars <- rsmr_cmd_long  %>% filter(rSMR == "rSMR4") %>%  dplyr::select(BGC, PERIOD, CMD.site) %>% filter(startsWith(BGC, "IDFdk3")) %>% arrange(PERIOD)# %>%#, "2022","2023"
+ # mutate(PERIOD = factor(PERIOD, levels = c("1961_1990","2001_2020", "2021"))) %>% #, "2022", "2023"
+ # mutate(BGC = factor(BGC, levels = unique(BGC)))
+
+ggplot(climate_vars, aes(y = CMD.site, x = PERIOD)) +
+  geom_boxplot(position = position_dodge(width = 0.8)) +
+  geom_hline(yintercept = 550, linetype = "dashed", color = "red") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "", x = "Period", y = "CMD")
+
+```
+
+```{r drought event comparison}
+#| tbl-cap: "Changes to drought susceptibility in drought year 2021"
+#| tbl-cap-location: top
+#| tbl-width: 8
+#| tbl-subtitle: "aSMR <= 3 (Moderately dry)"
+#| tbl-label: drought-event-comparison
+
+region.drought.events <- drought_all %>% mutate(BGC_NoSpace = str_extract(SiteSeries, "^[^/]+"))  %>%
+  left_join(BGC_all, by = c("BGC_NoSpace")) %>% 
+  mutate(FSRegion = ifelse(is.na(FSRegion), "Unknown", FSRegion)) %>% arrange(FSRegion, footnote, SiteSeries) %>% 
+  select(FSRegion, SiteSeries, footnote, aSMR.modern, footnote.drought, aSMR.drought,  event.drought) %>% 
+  filter(!is.na(footnote)) %>%   filter(!grepl("\\.1$|\\.2$", SiteSeries)) %>% distinct
+
+counts_by_region <- region.drought.events %>% filter(footnote == "dp_all") %>% 
+  group_by(FSRegion) %>% 
+  summarise(n = n(), .groups = "drop") %>% 
+  arrange(desc(n))
+
+
+droughtyear <- region.drought.events %>% filter(event.drought != "risk_unchanged")
+gt::gt(droughtyear) %>%
+  gt::tab_stubhead(label = "Site Series") %>%
+  gt::tab_options(
+    column_labels.font.size = 12,
+    column_labels.font.weight = "bold",
+    table.font.size = 12,
+    table.font.weight = "bold"
+  ) 
+
+```
+
+
+
+```{r}
+# ## Comparison of aSMR limits for tree species from CMD and ForDrat models
+# 
+# aSMR drought limit of each tree species is approximated using the tree suitability and edatopic tables to find the driest rSMR for each tree species in each BGC. The calculated aSMR value for each BGC x rSMR position is then assigned as the drought stressed aSMR limit for each species in each BGC. For each species, the range of rSMRs Klinka et al. (2000) provides tree species frequency ratings by aSMR. We use the driest aSMR with a frequency rating of '1'(very infrequent) to represent where the species is at its drought tolerance limit. The CMD estimated tree species aSMR limits are compared to the tree species frequency ratings from Klinka et al.(2000) to assess the validity of the CMD model. We apply the same methods to ForDrat model for comparison.
+
+# fordrat <- fread("./outputs/rSMR_aSMR_DroughtModel.csv")
+# fordrat.long <- fordrat  %>% pivot_longer(cols = -"BGC", names_to = "rSMR", values_to = "aSMR.fordrat") %>%  mutate(bgc = BGC) %>% select(bgc, rSMR, aSMR.fordrat)
+# fwrite(fordrat.long, file = "./outputs/fordrat_by_rSMR_long.csv")
+# klinka <- fread("./inputs/klinka_tree_asmr_mins_orig.csv") %>% pivot_longer(cols = -"spp", names_to = "frequency", values_to = "min_aSMR") 
+# ```
+# 
+# ```{r min suit CMD, echo=FALSE, message = FALSE, warning=FALSE}
+# suit <- fread("./inputs/suitability.csv") %>% filter(!newsuit %in% c("4", "5"), !is.na(newsuit))
+# 
+# driest.ss <- edatopic %>% 
+#   group_by(SS_NoSpace) %>% 
+#   slice_min(order_by = rSMR, n = 1) %>% 
+#   ungroup() %>% 
+#   select(SS_NoSpace, rSMR) %>% distinct %>% rename(ss_nospace = SS_NoSpace)
+# 
+# min.suit <- merge(suit, driest.ss, by = "ss_nospace") %>% 
+#   select(bgc, ss_nospace, spp, newsuit, rSMR) %>% 
+#   group_by(bgc, spp) %>% 
+#   slice_min(order_by = rSMR, n = 1) %>% 
+#   ungroup() %>% distinct %>% mutate(BGC = bgc)
+#   #select(ss_nospace, spp, newsuit, rSMR) %>% 
+# #siteseries <- fread("./inputs/site_series.csv")
+# rsmr_asmr.long <- rsmr_asmr.long %>% filter(PERIOD == "1961_1990", cmd.type == "CMD") %>% 
+#   mutate(rSMR = as.numeric(substr(rSMR, nchar(rSMR), nchar(rSMR)))) %>% ungroup %>%  data.table
+# 
+# # rsmr_cmd.long <- rsmr_cmd.long %>%
+# #   rename(bgc = BGC) %>%
+# #   mutate(rSMR = as.numeric(rSMR))  # Ensure numeric type
+# 
+# min.suit.asmr <- merge(min.suit, rsmr_asmr.long, by = c("bgc" = "BGC", "rSMR")) %>% 
+#   select(bgc, ss_nospace, spp, newsuit, rSMR, CMD.site, aSMR) %>% 
+#   group_by(bgc, spp) %>% 
+#   slice_max(order_by = CMD.site, n = 1) %>% 
+#   ungroup() %>% distinct %>% filter(newsuit %in% c("2","3"))
+# ```
+# 
+# ### Range of CMD from driest rSMR sites for each tree species
+# 
+# ```{r min CMD ranges, cho=FALSE, message = FALSE, warning=FALSE}
+# #ggplot boxplot of CMD.site by spp
+# ##2.  Site series tree suitability ratings (from CCISSv13)
+# ##4.  Tree species frequency ratings by aSMR (Klinka et al. 2000)
+# min.suit.cmd %>% 
+#   ggplot(aes(x = spp, y = CMD.site)) +
+#   geom_boxplot() +
+#   theme_minimal() +
+#   labs(title = "Boxplot of CMD by Species", x = "Species", y = "CMD") +
+#   theme(axis.text.x = element_text(angle = 45, hjust = 1))
+# 
+# min.suit.cmd <- min.suit.cmd %>%
+#   left_join(asmr.codes, by = "aSMR") 
+# # setDT(min.suit.cmd)[setDT(asmr.codes), aSMR_code := aSMR.code, on = "aSMR"]
+# # Adds `aSMR_code` column
+# asmr.codes.used <- min.suit.cmd %>% pull(aSMR.code) 
+# # Merge with `klinka.min` dataset
+# 
+# #ggplot boxplot of aSMR by spp
+# ```
+# 
+# ### Species limits from CMD model compared to Klinka
+# 
+# ```{r min aSMR CMD, cho=FALSE, message = FALSE, warning=FALSE}
+# klinka.min <- klinka %>% filter(!frequency %in% c("min2", "min3"))
+# klinka.min <- klinka.min %>%
+#   left_join(asmr.codes, by = c("min_aSMR" = "aSMR"))
+# 
+# min.suit.cmd %>% 
+#   ggplot(aes(x = spp, y = aSMR)) +
+#   geom_boxplot() +
+#     geom_point(data = klinka.min, aes(x = spp, y = min_aSMR), color = "red", alpha = 0.7) +
+#   theme_minimal() +
+#   labs(title = "Boxplot of driest aSMR from CMD by Species ", x = "Species", y = "aSMR",
+#        subtitle = "red dots are Klinka aSMR minimums") +
+#   #scale_y_continuous(breaks = 0:9, labels = aSMR.code) + 
+#   theme(axis.text.x = element_text(angle = 45, hjust = 1))
+# 
+# #xx <- min.suit.cmd %>% filter(spp == "Fd") %>% arrange (desc(aSMR))
+# # min.suit.cmd %>% 
+# #   ggplot(aes(x = spp, y = aSMR.code)) +  # Change y-axis to aSMR_code
+# #   geom_boxplot() +
+# #   geom_point(data = klinka.min, aes(x = spp, y = aSMR.code), color = "red", alpha = 0.7) +  # Use aSMR_code for points
+# #   theme_minimal() +
+# #   labs(title = "Boxplot of driest aSMR from CMD by Species", x = "Species", y = "aSMR Code",
+# #        subtitle = "Red dots are Klinka aSMR minimums") +
+# #   theme(axis.text.x = element_text(angle = 45, hjust = 1))
+# 
+# # klinka %>% filter(!frequency %in% c("min2", "min3")) %>% 
+# #   ggplot(aes(x = spp, y = min_aSMR)) +
+# #   geom_boxplot() +
+# #   theme_minimal() +
+# #   labs(title = "Boxplot of Klinka stressed aSMR by Species", x = "Species", y = "aSMR") +
+# #   theme(axis.text.x = element_text(angle = 45, hjust = 1))
+# ```
+# 
+# ### Species limits from ForDrat compared to Klinka
+# 
+# ```{r fordat min aSMR, ho=FALSE, message = FALSE, warning=FALSE}
+# fordrat.long <- fordrat.long %>%
+#   mutate(rSMR = as.numeric(substr(rSMR, nchar(rSMR), nchar(rSMR))))
+# 
+# min.suit2 <- merge(min.suit, fordrat.long, by = c("bgc", "rSMR")) %>% 
+#   select(bgc, ss_nospace, spp, newsuit, rSMR, aSMR.fordrat) %>% 
+#   group_by(bgc, spp) %>% 
+#   slice_max(order_by = aSMR.fordrat, n = 1) %>% 
+#   ungroup() %>% distinct
+# 
+# ## ggplot boxplot of CMD.site by spp
+# min.suit2 %>% 
+#   ggplot(aes(x = spp, y = aSMR.fordrat)) +
+#   geom_boxplot() +
+#       geom_point(data = klinka.min, aes(x = spp, y = min_aSMR), color = "red", alpha = 0.7) +
+#   theme_minimal() +
+#   labs(title = "Boxplot of lowest aSMR by Species from ForDrat ", x = "Species", y = "aSMR",
+#        subtitle = "red dots are Klinka aSMR minimums") +
+#   theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
+```{r estimate CMD.site limits}
+# initial limits
+# tree.max.cmd <- read.csv("./inputs/treespecies_CMD_limit.csv")
+# CMD <- fread("./outputs/CMD_by_rSMR_matrix.csv")
+# rsmr_cmd.long <- CMD %>% pivot_longer(cols = -"BGC", names_to = "excessive.rSMR", values_to = "CMD.site") %>%
+#   mutate(CMD.insolation = CMD.site * 1.5)# %>% # adjust for aspect
+# # filter to only BGC starting with IDF
+# #rsmr_cmd.long <- rsmr_cmd.long %>% filter(grepl("^(CDF|CMA|CWH|MH|IDFww|ICHun|ESSFun1|MSun)", BGC))
+# rsmr_cmd.long <- rsmr_cmd.long %>% filter(grepl("^(IDF|PP)", BGC))
+# # Loop through all unique species in tree.max.cmd
+# tree.max.cmd %>% 
+#   distinct(spp) %>% 
+#   pull(spp) %>% 
+#   walk(~{
+#     tree.choose <- .x
+#     #tree.choose <- "Sx"
+#     tree.choose.cmd <- tree.max.cmd %>% filter(spp == tree.choose) %>% pull(cmd.max)
+#     
+#     max.rsmr_cmd <- rsmr_cmd.long %>% 
+#       filter(CMD.site <= tree.choose.cmd) %>% 
+#       group_by(BGC) %>%  
+#       slice_max(order_by = CMD.site, n = 1) %>% 
+#       ungroup()
+#     
+#     # Generate table for each species
+#     table_output <- gt::gt(max.rsmr_cmd) %>%
+#       gt::tab_stubhead(label = "BGC") %>%
+#       gt::tab_header(
+#         title = paste0("minimum rSMR class for ", tree.choose, " in each BGC"),
+#         subtitle = "CMD values adjusted for rSMR position"
+#       ) %>% 
+#       gt::tab_options(
+#         column_labels.font.size = 12,
+#         column_labels.font.weight = "bold",
+#         table.font.size = 12,
+#         table.font.weight = "bold"
+#       )
+# 
+# gt::gtsave(table_output, path = "./outputs/", file = paste0(tree.choose, 'min_rSMR.png'))
+#  #   print(table_output)  # Show the table
+#   })
+# 
+
+```
