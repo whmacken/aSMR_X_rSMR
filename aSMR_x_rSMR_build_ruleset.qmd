@@ -121,7 +121,8 @@ The development of a seamless climate surface for British Columbia presented an 
 #                               return_refperiod = TRUE, 
 #                               cache = TRUE)
 #allDat <- left_join(coords.bgc, clim_vars) %>% as.data.table %>% mutate(PERIOD == "1961-1990")
-allDat <- fread("D:/OneDrive - Government of BC/CommonTables/BGC_climate/WNA_v13_4_climr_2km.csv")
+#allDat <- fread("D:/OneDrive - Government of BC/CommonTables/BGC_climate/WNA_v13_4_climr_2km.csv")
+allDat <- fread("./inputs/WNA_BGC_climr.csv") %>% rename ("PAS" = "PAS_an", "CMD" = "CMD_an")
 CMDtemp <- allDat %>% select("CMD", "CMD_08")
 AllBGC <- unique(allDat$BGC) %>% data.frame() %>% pull()
 # 
@@ -274,7 +275,7 @@ fwrite (all_cmd, "./outputs/CMDcalc_aSMR_by_rSMR_matrix.csv")
 #| warning: false
 #| fig-align: "center"
 
-expGrid <- read.csv("./inputs/ExpertGrid_2025.csv") %>% filter(new_old != "new") %>% select(-new_old)
+expGrid <- read.csv("./inputs/ExpertGrid_adjusted.csv") #%>% filter(new_old != "new") %>% select(-new_old)
 expGrid$BGC <- gsub("[[:space:]]","",expGrid$BGC)
 colnames(expGrid)[-1] <- paste(colnames(expGrid)[-1],"_Exp", sep = "")
 CMD.zonal <- rsmr_cmd %>% select(BGC, rSMR4)
@@ -328,7 +329,7 @@ CMDrange_reduced <- CMDrange %>%  arrange(aSMR) %>%
   group_by(aSMR) %>%
   slice_sample(n = 7) %>%
   ungroup()
-ggplot(CMD.coast, aes(x = aSMR, y = rSMR4)) +
+ggplot(CMD.interior, aes(x = aSMR, y = rSMR4)) +
   geom_boxplot(stat = "boxplot", varwidth = TRUE) +
   geom_point(shape = 23, fill = "red", size = 2) +
   geom_hline(yintercept = seq(0, max(CMDrange$rSMR4, na.rm = TRUE), by = 100),

@@ -21,37 +21,49 @@ Prep data for the tree drought model.
 
 ```{r import tables, echo=FALSE, message = FALSE, warning=FALSE}
 # import grid points attributed to BGC and select a set
-coords <- fread("D:/OneDrive - Government of BC/CommonTables/BGCv13_3_2km_gridpts.csv")# %>% dplyr::select(-BGC)
-coords <- coords %>%
-  group_by(BGC) %>%
-  sample_n(100, replace = TRUE) %>% ungroup %>% 
-  rename(lon = xcoord, lat = ycoord)
-count_tp <- coords %>% dplyr::count(BGC)
-coords_sf <- st_as_sf(coords, coords = c("lon","lat"), crs = 4326)
-coords <- as.data.frame(coords) %>% distinct
-setcolorder(coords, c("lat", "lon","elev","id"))
-coords.bgc <- coords %>% dplyr::select(id, BGC, lon,lat,elev)
-## download climr data
-tic()
-clim_vars <- climr::downscale(setDT(coords),
-                              vars = list_vars(),
-                              return_refperiod = TRUE,
-                              obs_periods = c("2001_2020"),
-                              obs_years = 2001:2024,
-                              #obs_ts_dataset = "cru.gpcc",
-                              obs_ts_dataset = "mswx.blend",
-                              cache = TRUE,
-                              db_option = "local")
+# coords <- fread("D:/OneDrive - Government of BC/CommonTables/BGCv13_3_2km_gridpts.csv")# %>% dplyr::select(-BGC)
+# coords <- coords %>%
+#   group_by(BGC) %>%
+#   sample_n(100, replace = TRUE) %>% ungroup %>% 
+#   rename(lon = xcoord, lat = ycoord)
+# count_tp <- coords %>% dplyr::count(BGC)
+# coords_sf <- st_as_sf(coords, coords = c("lon","lat"), crs = 4326)
+# coords <- as.data.frame(coords) %>% distinct
+# setcolorder(coords, c("lat", "lon","elev","id"))
+# coords.bgc <- coords %>% dplyr::select(id, BGC, lon,lat,elev)
+# ## download climr data
+# tic()
+# clim_vars <- climr::downscale(setDT(coords),
+#                               vars = list_vars(),
+#                               return_refperiod = TRUE,
+#                               obs_periods = c("2001_2020"),
+#                               obs_years = 2001:2024,
+#                               #obs_ts_dataset = "cru.gpcc",
+#                               obs_ts_dataset = "mswx.blend",
+#                               cache = TRUE,
+#                               db_option = "local")
+# 
+# allDat <- left_join(coords.bgc, clim_vars) %>% as.data.table
+# fwrite(allDat, "./inputs/BGC_climate_periods.csv")
+```
 
-allDat <- left_join(coords.bgc, clim_vars) %>% as.data.table
-fwrite(allDat, "./inputs/BGC_climate_periods.csv")
 
+```{r import tables, echo=FALSE, message = FALSE, warning=FALSE}
+allDat <- fread("./climr_data/clim_vars_hist.csv") %>% mutate(DATASET = "current")
+#future <- fread("./climr_data/clim_vars_future_2021_2040_ensemble.csv")
+future.years.best <- fread("./climr_data/clim_vars_future_best_ssp245_2025_2045.csv")%>% mutate(GCM = "best")
+future.years.worst <- fread("./climr_data/clim_vars_future_worst_ssp485_2025_2045.csv")%>% mutate(GCM = "worst")
+future.years.mid <- fread("./climr_data/clim_vars_future_middle_ssp245_2025_2045.csv")%>% mutate(GCM = "mid")
+future <- rbind(future.years.best, future.years.worst, future.years.mid) %>% select(-SSP, -RUN) %>% 
+  rename(DATASET = GCM)#, CMI = CMI_an, DD18 = DD18_an ) %>% 
+allDat <- rbind(allDat, future, fill=FALSE)  %>% mutate(PERIOD = paste0(PERIOD, "_", DATASET)) %>% select(-DATASET) %>% 
+rename(CMD = CMD_an)
 CMDtemp <- allDat %>% select("CMD", "CMD_08")
 AllBGC <- unique(allDat$BGC) %>% data.frame() %>% pull()
 
 ## ID BGCs with consistent summer precipitation = less drought prone on drier rSMR than expected
 ## Especially to fix hypermartime
-sPPTtemp <- allDat %>% select("BGC", "PERIOD", "PPT_05","PPT_06","PPT_07","PPT_08","PPT_09" )
+sPPTtemp <- allDat %>% select("BGC", "PERIOD",  "PPT_05","PPT_06","PPT_07","PPT_08","PPT_09" )
 sPPTtemp$Moist <- rowSums(sPPTtemp[,3:7] >90) #count of growing season months with >90mm rain
 ratio.moist <- sPPTtemp %>% select(BGC, PERIOD, Moist) %>% group_by (BGC, PERIOD) %>% summarize (count= length(BGC), moistcount = length(BGC[Moist == 5]), ratio = moistcount/count)
 sPPTtemp$Moist <- ifelse(sPPTtemp$Moist > 4, 1, 0) # flag locations where all months are >90mm rain. If all months then always overcapacity zonal soils
@@ -60,7 +72,7 @@ sPPTtemp <- sPPTtemp %>% select("BGC", "PERIOD", "Moist")
 moist.multiply <- ratio.moist %>% select(BGC, PERIOD, ratio) %>% mutate(multiplier = 1+ratio) %>% data.table
 #allDat[moist.multiply, CMD := CMD / multiplier, on = "BGC"]
 
-wPPTtemp <- allDat[,c("BGC", "PERIOD", "PPT_at","PPT_wt","PAS")]
+wPPTtemp <- allDat[,c("BGC", "PERIOD", "PPT_at","PPT_wt","PAS_an")]
 allDat2 <- cbind(wPPTtemp,CMDtemp)
 #allDat <- cbind(wPPTtemp,sPPTtemp[c("Moist")])
 #allDat <- cbind(allDat,temp,temp2) ### use this one if Moist indicator is completed above
@@ -78,13 +90,18 @@ allDat2 <- allDat2[,c("BGC", "PERIOD", "CMD","PPT.dorm")]
 allDat2$Def <- 350 - allDat2$PPT.dorm 
 allDat2$Def[allDat2$Def < 0] <- 0 #negative values set to zero = no deficit
 allDat2$CMD <- allDat2$CMD + allDat2$Def
-allDat2 <- allDat2[,c("BGC", "PERIOD", "CMD")]
+allDat2 <- allDat2[,c("BGC", "PERIOD",  "CMD")]
 
 CMD <- allDat2 %>%
   group_by(BGC, PERIOD) %>%
-  summarize(across(everything(), median)) %>% ungroup# CMD now equals CMD.total
-    CMD <- CMD %>% mutate(CMD.hot = CMD * 1.25) # 25% increase in CMD for insolation slopes (from Jackson 1966)
-    CMD <- CMD %>% mutate(CMD.cold = CMD * 0.85)
+  summarize(across(everything(), median)) %>% ungroup
+# CMD now equals CMD.total
+CMD <- CMD %>%
+  mutate(
+    CMD.hot  = CMD * 1.25,
+    CMD.cold = CMD * 0.85
+  )
+
 ```
 
 ``` {r create tables, echo=FALSE, message = FALSE, warning=FALSE}

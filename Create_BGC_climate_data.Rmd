@@ -18,15 +18,16 @@ require(sf)
 require(climr)
 require(terra)
 require(tictoc)
+require(pak)
 #require(PROJ)
 ```
 # Create a grid of points across the WNA BGC map and add elevation and BGC membership
 This only needs to be rerun with new version of BGC mapping
 ```{r build grid and add elevation}
-require(tictoc)
+# require(tictoc)
 # tic()
-# #wna_bgc <- st_read("D:/OneDrive - Government of BC/CommonTables/BGC_Maps/BGCv13_3.gpkg")
-# wna_bgc <- st_read("D:/OneDrive - Government of BC/CommonTables/BGC_Maps/WNA_BGC_v13_13Nov2024_2.gpkg")
+# wna_bgc <- st_read("D:/OneDrive - Government of BC/CommonTables/BGC_Maps/BGCv13_8_final_dissolved_clipped.gpkg")# %>% filter(BGC %in% c("SBSmz", "SBSvc"))
+# #wna_bgc <- st_read("D:/OneDrive - Government of BC/CommonTables/BGC_Maps/WNA_BGC_v13_13Nov2024_2.gpkg")
 # #wna_bgc2 <- vect("D:/OneDrive - Government of BC/CommonTables/BGC_Maps/BGCv13_3_epsg4326.gpkg")
 # #wna_bgc2 <- vect("D:/OneDrive - Government of BC/CommonTables/BGC_Maps/WNA_BGC_v13_13Nov2024_2.gpkg")
 # wna_bgc2 <- wna_bgc %>% st_transform(crs = 4326) %>% vect#("D:/OneDrive - Government of BC/CommonTables/BGC_Maps/WNA_BGC_v13_13Nov2024_2.gpkg")
@@ -40,7 +41,7 @@ require(tictoc)
 # tmp_elev <- terra::extract(elev,wna_grid2)
 # coords <- geom(wna_grid2, df = T)
 # coords_only <- coords %>% dplyr::select(x,y)
-# bgc_coords <- terra::extract(wna_bgc2,coords_only) %>% dplyr::select(BGC)
+# bgc_coords <- terra::extract(wna_bgc2,coords_only) #%>% dplyr::select(BGC)
 # #coords2 <- cbind(bgc_coords, coords)# %>% tidyr::drop_na()
 # coords2 <- left_join(coords, bgc_coords, by = c("geom" = "id.y")) %>% distinct(geom, .keep_all = TRUE)
 # ## add BGC
@@ -64,43 +65,148 @@ coords <- coords %>%
   group_by(BGC) %>%
   sample_n(100, replace = TRUE) %>% ungroup
 count_tp <- coords %>% dplyr::count(BGC)
-# fwrite(coords,("./inputs/WNA_2km_grid.csv"))
-# coords <- coords[!is.na(elev),]
 coords_sf <- st_as_sf(coords, coords = c("lon","lat"), crs = 4326)
-#save as geopackage to check
-#st_write(coords_sf, "./inputs/WNA_2km_grid_BGC.gpkg", append=FALSE)
-# coords_sf$elev <- NULL
-# coords_sf <- st_transform(coords_sf, 3005)
-# #
-# bgcs <- st_read("D:/CommonTables/BGC_Maps/WNA_BGC_v12_5Apr2022.gpkg")
-# 
-# coords_bgc <- st_join(coords_sf, bgcs, largest = TRUE)
-# coords_bgc <- data.table(coords_bgc[,c("id","BGC")])
-# coords_bgc[,geometry := NULL]
-# #coords_bgc <- coords_bgc[!is.na(BGC),]
-# # 
-# # #coords <- fread("WNA_2km_grid_WHM.csv")
 
 coords <- as.data.frame(coords) %>% distinct# %>% dplyr::rename(long = 1, lat = 2)
 setcolorder(coords, c("lon","lat","elev","id"))
 coords.bgc <- coords %>% dplyr::select(id, BGC, lon,lat,elev)# %>% dplyr::rename(ID = id)
-# remove duplicates
-## based on vs_final below
 tic()
-# clim_vars <- climr::downscale(setDT(coords),  vars = list_vars(), return_refperiod = TRUE, obs_periods = c("2001_2020"), obs_years = 2023, cache = TRUE)
 
-clim_vars <- climr::downscale(setDT(coords),  
-                              vars = list_vars(), 
-                              return_refperiod = TRUE, 
-                              obs_periods = c("2001_2020"),
-                              obs_years = 2001:2024, 
-                              #obs_ts_dataset = "cru.gpcc",
-                              obs_ts_dataset = "mswx.blend",
-                              cache = TRUE)
+
+# clim_vars_hist <- climr::downscale(setDT(coords),  
+#                               vars = list_vars(set = c("Annual", "Seasonal", "Monthly")), 
+#                               return_refperiod = TRUE, 
+#                               obs_periods = c("2001_2020"),
+#                               obs_years = 2001:2024, 
+#                               # gcms = c("ACCESS-ESM1-5","CNRM-ESM2-1", "EC-Earth3", "GFDL-ESM4", "GISS-E2-1-G", "MIROC6",  "MPI-ESM1-2-HR", "MRI-ESM2-0",  "UKESM1-0-LL" ),
+#                               # ssps = c("ssp126", "ssp245", "ssp370"),
+#                               # gcm_ssp_years = c(2025:2045),
+#                               #ensemble_mean = TRUE,
+#                               #obs_ts_dataset = "cru.gpcc",
+#                               obs_ts_dataset = "mswx.blend",
+#                               db_option = "local",
+#                               cache = TRUE)
+# clim_vars_hist2 <- left_join(clim_vars_hist, coords.bgc, by = c("id")) %>% 
+#   dplyr::select(id, BGC, lon,lat,elev, PERIOD, everything())
+# 
+# fwrite(clim_vars_hist2, "./climr_data/clim_vars_hist.csv")
+# toc()
+
+Sys.setenv(PROJ_LIB = system.file("proj", package = "terra"))
+
+# clim_vars_future <- downscale(
+#   xyz = setDT(coords)[,.(id,lon,lat,elev, BGC)],
+#   #obs_years = 2001:2023,
+#   #gcm_hist_years = 2001:2014,
+#   gcm_ssp_years = 2025:2040,
+#   gcms = list_gcms()[1],
+#   ssps = "ssp245",
+#   max_run = 1,
+#   ensemble_mean = TRUE,
+#   vars = list_vars(set = c("Annual", "Seasonal", "Monthly")),
+#   #vars = c("MAT", "PPT_an", "PAS_an"),
+#   cache = TRUE
+# )
+
+tic()
+clim_vars_future <- downscale(xyz = setDT(coords)[,.(id,lon,lat,elev, BGC)],
+          vars = list_vars(set = c("Annual", "Seasonal", "Monthly")), 
+          return_refperiod = FALSE, 
+          ensemble_mean = FALSE,
+          gcms = c("ACCESS-ESM1-5","CNRM-ESM2-1", "EC-Earth3", "GFDL-ESM4", "GISS-E2-1-G", "MIROC6",  "MPI-ESM1-2-HR", "MRI-ESM2-0" ),
+          ssps = c("ssp245", "ssp370", "ssp585"),           
+          gcm_ssp_years = c(2025:2045),
+          #run_nm = list_runs_ssp(gcm = list_gcms(), ssp = list_ssps()[2]),#[12][2]
+          max_run = 3,
+          #gcm_periods = list_gcm_periods()[2],
+          
+          db_option = "local",
+          cache=TRUE
+          )
+toc()
+# 
+# clim_vars_future2 <- left_join(clim_vars_future, coords.bgc, by = c("id")) %>%
+#   dplyr::select(id, BGC, lon,lat,elev, PERIOD, everything())
+
+##convert to data.table if needed
+tic()
+setDT(clim_vars_future)
+setDT(coords.bgc)
+
+clim_vars_future3 <- 
+  coords.bgc[clim_vars_future, on = "id"][
+    , c("id", "BGC", "lon", "lat", "elev", "PERIOD",
+        setdiff(names(.SD), c("id","BGC","lon","lat","elev","PERIOD"))),
+    .SDcols = names(.SD)
+  ]
+toc()
+
+
+fwrite(clim_vars_future2, "./climr_data/clim_vars_futures_2025_2045.csv")
+
+# tic()
+# clim_vars_future_worst<- downscale(xyz = setDT(coords)[,.(id,lon,lat,elev, BGC)],
+#           vars = list_vars(set = c("Annual", "Seasonal", "Monthly")), 
+#           return_refperiod = FALSE, 
+#           ensemble_mean = TRUE,
+#           gcms = list_gcms()[1], 
+#           run_nm = list_runs_ssp(gcm = list_gcms()[1], ssp = list_ssps()[1])[2],
+#           ssps = list_ssps()[4], 
+#           gcm_periods = list_gcm_periods()[2],
+#           gcm_ssp_years = c(2025:2045),
+#           db_option = "local",
+#           cache=TRUE
+#           )
+# toc()
+# clim_vars_future_worst2 <- left_join(clim_vars_future_worst, coords.bgc, by = c("id")) %>% 
+#   dplyr::select(id, BGC, lon,lat,elev, PERIOD, everything())
+# 
+# fwrite(clim_vars_future_worst2, "./climr_data/clim_vars_future_worst_ssp485_2025_2045.csv")
+# 
+# 
+# tic()
+# tic()
+# clim_vars_future_mid <- downscale(xyz = setDT(coords)[,.(id,lon,lat,elev, BGC)],
+#           vars = list_vars(set = c("Annual", "Seasonal", "Monthly")), 
+#           return_refperiod = FALSE, 
+#           ensemble_mean = TRUE,
+#           gcms = list_gcms()[6], 
+#           run_nm = list_runs_ssp(gcm = list_gcms()[6], ssp = list_ssps()[1])[2],
+#           ssps = list_ssps()[4], 
+#           gcm_periods = list_gcm_periods()[2],
+#           gcm_ssp_years = c(2025:2045),
+#           db_option = "local",
+#           cache=TRUE
+#           )
+# toc()
+# 
+# clim_vars_future_mid2 <- left_join(clim_vars_future_mid, coords.bgc, by = c("id")) %>% 
+#   dplyr::select(id, BGC, lon,lat,elev, PERIOD, everything())
+# 
+# fwrite(clim_vars_future_mid2, "./climr_data/clim_vars_future_middle_ssp245_2025_2045.csv")
+# 
+# 
+# clim_vars_future <- climr::downscale(setDT(coords),  
+#                               vars = list_vars(set = c("Annual", "Seasonal", "Monthly")), 
+#                               return_refperiod = FALSE, 
+#                               gcm_periods = c("2021_2040"),
+#                               #obs_years = 2001:2024, 
+#                               gcms = c("ACCESS-ESM1-5","CNRM-ESM2-1", "EC-Earth3", "GFDL-ESM4", "GISS-E2-1-G", "MIROC6", "MPI-ESM1-2-HR", "MRI-ESM2-0" ),
+#                                ssps = c("ssp126", "ssp245", "ssp370"),
+#                                #gcm_ssp_years = c(2025),#:2045),
+#                               ensemble_mean = TRUE,
+#                               #obs_ts_dataset = "cru.gpcc",
+#                               #obs_ts_dataset = "mswx.blend",
+#                               db_option = "local",
+#                               cache = TRUE)
+# toc()
+# clim_vars_future2 <- left_join(clim_vars_future, coords.bgc, by = c("id")) %>% 
+#   dplyr::select(id, BGC, lon,lat,elev, PERIOD, everything())
+# fwrite(clim_vars_future2, "./climr_data/clim_vars_future_2021_2040_ensemble.csv")
 # clim_vars <- climr::downscale(xyz=coords, obs_periods = NULL, vars = list_vars(set = c("Annual", "Seasonal")), cache = TRUE)                                                 
 #clim_vars_base <- climr::downscale(setDT(coords),  vars = list_vars(),cache = TRUE)
 # clim_vars <- climr::downscale(xyz=coords, obs_periods = NULL, vars = list_vars(set = c("Annual", "Seasonal")), cache = TRUE)
-toc()
+
 #' ## as a data.table
 #' climate_norms_hist <- downscale(
 #'   xyz = in_xyz, which_refmap = "auto",
@@ -108,16 +214,16 @@ toc()
 #'   vars = vars,
 #'   out_spatial = FALSE, plot = "PPT"
 #' ) ## specify desired variables to plot
-clim_vars2 <- dplyr::left_join(coords.bgc, clim_vars)
-#clim_vars_base <- dplyr::left_join(coords.bgc, clim_vars_base)
-clim_vars_sf <- st_as_sf(clim_vars2, coords = c("lon","lat"), crs = 4326)
-st_write(clim_vars_sf, "./inputs/WNA_2km_grid_BGC_climr.gpkg", append=FALSE)
-setDT(clim_vars2)
-clim_vars2 <- clim_vars2[!is.nan(PPT_05),] ##lots of points in the ocean
-#clim_vars[coords_bgc, BGC := i.BGC, on = c(ID = "id")]
-clim_vars2 <- clim_vars2[!is.na(BGC),]
-clim_var2 <- clim_vars2 %>% select(-c("DATASET"))
-fwrite(clim_vars2,"./inputs/WNA_BGC_climr.csv")
+# clim_vars2 <- dplyr::left_join(coords.bgc, clim_vars)
+# #clim_vars_base <- dplyr::left_join(coords.bgc, clim_vars_base)
+# clim_vars_sf <- st_as_sf(clim_vars2, coords = c("lon","lat"), crs = 4326)
+# st_write(clim_vars_sf, "./inputs/WNA_2km_grid_BGC_climr.gpkg", append=FALSE)
+# setDT(clim_vars2)
+# clim_vars2 <- clim_vars2[!is.nan(PPT_05),] ##lots of points in the ocean
+# #clim_vars[coords_bgc, BGC := i.BGC, on = c(ID = "id")]
+# clim_vars2 <- clim_vars2[!is.na(BGC),]
+# # clim_var2 <- clim_vars2 %>% select(-c("DATASET"))
+# fwrite(clim_vars2,"./inputs/WNA_BGC_climr.csv")
 # clim_vars[,PERIOD := NULL]
 # clim_vars[,ID := NULL]
 
