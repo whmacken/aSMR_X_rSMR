@@ -1,0 +1,277 @@
+---
+title: "Graphic of aSMR to rSMR with curve of CMD"
+author: "William H MacKenzie"
+date: "2026-11-10"
+output: html_document
+---
+---
+title: "Graphic of aSMR in relation to rSMR and CMD"
+author: "William H MacKenzie"
+date: "2026-11-10"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.width = 9,
+  fig.height = 6,
+  dpi = 150
+)
+
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(scam)
+library(metR)
+```
+
+# Read and prepare the rule table
+
+```{r read-data}
+rules <- data.table::fread(
+  "./inputs/aSMR_rules_test.csv"
+) %>%
+  mutate(
+    SMRLevel = as.numeric(SMRLevel),
+    CMD_range = as.numeric(CMD_range),
+    aSMR = as.numeric(aSMR)
+  )
+
+rules_mod <- rules %>%
+  filter(
+    CMD_range < 9999,
+    is.finite(SMRLevel),
+    is.finite(CMD_range),
+    is.finite(aSMR)
+  ) %>%
+  arrange(
+    SMRLevel,
+    CMD_range
+  )
+
+dplyr::glimpse(rules_mod)
+
+library(mgcv)
+library(dplyr)
+
+asmr_mod <- mgcv::gam(
+  aSMR ~ te(
+    SMRLevel,
+    CMD_range,
+    k = c(3, 8),
+    bs = c("cr", "cr")
+  ),
+  data = rules_mod,
+  method = "REML",
+  gamma = 1.4
+)
+
+predict_aSMR <- function(rSMR, CMD) {
+
+  pred <- predict(
+    asmr_mod,
+    newdata = data.frame(
+      SMRLevel = rSMR,
+      CMD_range = CMD
+    ),
+    type = "response"
+  ) %>%
+    as.numeric()
+
+  pmin(
+    9,
+    pmax(0, pred)
+  )
+}
+
+
+
+surf_dat <- expand.grid(
+  SMRLevel = seq(
+    min(rules_mod$SMRLevel),
+    max(rules_mod$SMRLevel),
+    length.out = 201
+  ),
+  CMD_range = seq(
+    0,
+    min(1200, max(rules_mod$CMD_range)),
+    length.out = 241
+  )
+)
+
+predict_aSMR(
+  rSMR = 5,
+  CMD = 320
+)
+
+
+surf_dat$aSMR <- predict(
+  asmr_mod,
+  newdata = surf_dat,
+  type = "response"
+) %>%
+  as.numeric()
+
+surf_dat$aSMR <- pmin(
+  9,
+  pmax(0, surf_dat$aSMR)
+)
+
+library(ggplot2)
+library(metR)
+
+asmr_breaks <- seq(0, 9, by = 0.5)
+
+ggplot(
+  surf_dat,
+  aes(
+    x = SMRLevel,
+    y = CMD_range,
+    z = aSMR
+  )
+) +
+  geom_contour_filled(
+    breaks = asmr_breaks
+  ) +
+  geom_contour(
+    breaks = asmr_breaks,
+    colour = "black",
+    linewidth = 0.35
+  ) +
+  metR::geom_text_contour(
+    breaks = asmr_breaks,
+    size = 3
+  ) +
+  scale_x_continuous(
+    breaks = 0:8
+  ) +
+  scale_y_continuous(
+    breaks = seq(0, 1200, 100)
+  ) +
+  labs(
+    x = "Relative soil moisture regime (rSMR)",
+    y = "Climatic moisture deficit (CMD)",
+    fill = "aSMR",
+    title = "Adjusted soil moisture regime by rSMR and CMD"
+  ) +
+  theme_bw()
+```
+
+```{r}
+estimate_aSMR <- function(CMD, model = asmr_mod) {
+
+  # Create all rSMR classes
+  out <- tibble(
+    rSMR = 0:8,
+    CMD = CMD
+  ) %>%
+    mutate(
+
+      # Adjust climate CMD for site moisture regime
+      CMD.adj = case_when(
+        rSMR == 0 ~ CMD + 500,
+        rSMR == 1 ~ CMD + 375,
+        rSMR == 2 ~ CMD + 250,
+        rSMR == 3 ~ CMD + 125,
+        rSMR == 4 ~ CMD,
+        rSMR == 5 ~ CMD / 2,
+        rSMR == 6 ~ CMD / 4,
+        rSMR == 7 ~ CMD / 8,
+        rSMR == 8 ~ 0,
+        TRUE      ~ NA_real_
+      ),
+
+      # Prevent negative CMD
+      CMD.site = pmax(CMD.adj, 0)
+    )
+
+  # Predict aSMR using rSMR and site-adjusted CMD
+  out$aSMR <- predict(
+    model,
+    newdata = data.frame(
+      SMRLevel = out$rSMR,
+      CMD_range = out$CMD.site
+    ),
+    type = "response"
+  ) %>%
+    as.numeric()
+
+  # Keep aSMR within valid range
+  out <- out %>%
+    mutate(
+      aSMR = pmin(9, pmax(0, aSMR))
+    )
+
+  return(out)
+}
+
+estimate_aSMR(CMD = 550)
+```
+
+
+# Selected rule-table relationships
+
+This plot shows the original rule-table values for selected relative soil moisture regimes.
+
+```{r rule-table-plot}
+rules_selected <- rules_mod %>%
+  filter(
+    SMRLevel %in% c(0, 5, 6, 7)
+  ) %>%
+  mutate(
+    rSMR = factor(
+      SMRLevel,
+      levels = sort(unique(SMRLevel))
+    )
+  )
+
+ggplot(
+  rules_selected,
+  aes(
+    x = CMD_range,
+    y = aSMR,
+    colour = rSMR,
+    group = rSMR
+  )
+) +
+  geom_step(
+    direction = "hv",
+    linewidth = 1
+  ) +
+  geom_point(
+    size = 2
+  ) +
+  scale_x_continuous(
+    breaks = seq(0, 1200, by = 100)
+  ) +
+  scale_y_continuous(
+    breaks = seq(0, 9, by = 0.5)
+  ) +
+  coord_cartesian(
+    xlim = c(0, 1200),
+    ylim = c(0, 9)
+  ) +
+  labs(
+    x = "Climatic moisture deficit (CMD)",
+    y = "Adjusted soil moisture regime (aSMR)",
+    colour = "rSMR",
+    title = paste(
+      "Adjustment of relative soil moisture regime",
+      "by climatic moisture deficit"
+    )
+  ) +
+  theme_bw() +
+  theme(
+    legend.position = "right"
+  )
+```
+
+
+

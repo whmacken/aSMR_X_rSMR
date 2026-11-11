@@ -26,7 +26,7 @@ This only needs to be rerun with new version of BGC mapping
 ```{r build grid and add elevation}
 # require(tictoc)
 # tic()
-# wna_bgc <- st_read("D:/OneDrive - Government of BC/CommonTables/BGC_Maps/BGCv13_8_final_dissolved_clipped.gpkg")# %>% filter(BGC %in% c("SBSmz", "SBSvc"))
+# wna_bgc <- st_read("D:/OneDrive - Government of BC/CommonTables/BGC_Maps/BGCv13_dissolved.gpkg")# %>% filter(BGC %in% c("SBSmz", "SBSvc"))
 # #wna_bgc <- st_read("D:/OneDrive - Government of BC/CommonTables/BGC_Maps/WNA_BGC_v13_13Nov2024_2.gpkg")
 # #wna_bgc2 <- vect("D:/OneDrive - Government of BC/CommonTables/BGC_Maps/BGCv13_3_epsg4326.gpkg")
 # #wna_bgc2 <- vect("D:/OneDrive - Government of BC/CommonTables/BGC_Maps/WNA_BGC_v13_13Nov2024_2.gpkg")
@@ -42,7 +42,7 @@ This only needs to be rerun with new version of BGC mapping
 # coords <- geom(wna_grid2, df = T)
 # coords_only <- coords %>% dplyr::select(x,y)
 # bgc_coords <- terra::extract(wna_bgc2,coords_only) #%>% dplyr::select(BGC)
-# #coords2 <- cbind(bgc_coords, coords)# %>% tidyr::drop_na()
+#  #coords2 <- cbind(bgc_coords, coords)# %>% tidyr::drop_na()
 # coords2 <- left_join(coords, bgc_coords, by = c("geom" = "id.y")) %>% distinct(geom, .keep_all = TRUE)
 # ## add BGC
 # setDT(coords2)
@@ -71,78 +71,89 @@ coords <- as.data.frame(coords) %>% distinct# %>% dplyr::rename(long = 1, lat = 
 setcolorder(coords, c("lon","lat","elev","id"))
 coords.bgc <- coords %>% dplyr::select(id, BGC, lon,lat,elev)# %>% dplyr::rename(ID = id)
 tic()
+clim_vars_norms <- climr::downscale(setDT(coords),
+                              vars = list_vars(set = c("Annual", "Seasonal", "Monthly")),
+                              return_refperiod = TRUE,
+                              obs_periods = c("2001_2020"),
+                              #obs_ts_dataset = "mswx.blend",
+                              db_option = "local",
+                              cache = TRUE)
+clim_vars_norms2 <- left_join(clim_vars_norms, coords.bgc, by = c("id")) %>%
+  dplyr::select(id, BGC, lon,lat,elev, PERIOD, everything())
 
+fwrite(clim_vars_norms2, "./inputs/WNA_BGC_climr.csv")
+toc()
 
-# clim_vars_hist <- climr::downscale(setDT(coords),  
-#                               vars = list_vars(set = c("Annual", "Seasonal", "Monthly")), 
-#                               return_refperiod = TRUE, 
+# clim_vars_hist <- climr::downscale(setDT(coords),
+#                               vars = list_vars(set = c("Annual", "Seasonal", "Monthly")),
+#                               return_refperiod = TRUE,
 #                               obs_periods = c("2001_2020"),
-#                               obs_years = 2001:2024, 
-#                               # gcms = c("ACCESS-ESM1-5","CNRM-ESM2-1", "EC-Earth3", "GFDL-ESM4", "GISS-E2-1-G", "MIROC6",  "MPI-ESM1-2-HR", "MRI-ESM2-0",  "UKESM1-0-LL" ),
-#                               # ssps = c("ssp126", "ssp245", "ssp370"),
-#                               # gcm_ssp_years = c(2025:2045),
-#                               #ensemble_mean = TRUE,
-#                               #obs_ts_dataset = "cru.gpcc",
-#                               obs_ts_dataset = "mswx.blend",
-#                               db_option = "local",
-#                               cache = TRUE)
-# clim_vars_hist2 <- left_join(clim_vars_hist, coords.bgc, by = c("id")) %>% 
+#                               obs_years = 2001:2024,
+#                                gcms = c("ACCESS-ESM1-5","CNRM-ESM2-1", "EC-Earth3", "GFDL-ESM4", "GISS-E2-1-G", "MIROC6",  "MPI-ESM1-2-HR", "MRI-ESM2-0",  "UKESM1-0-LL" ),
+                              # ssps = c("ssp126", "ssp245", "ssp370"),
+                              # gcm_ssp_years = c(2025:2045),
+                              #ensemble_mean = TRUE,
+                              #obs_ts_dataset = "cru.gpcc",
+                              # obs_ts_dataset = "mswx.blend",
+                              # db_option = "local",
+                              # cache = TRUE)
+# clim_vars_hist2 <- left_join(clim_vars_hist, coords.bgc, by = c("id")) %>%
 #   dplyr::select(id, BGC, lon,lat,elev, PERIOD, everything())
 # 
 # fwrite(clim_vars_hist2, "./climr_data/clim_vars_hist.csv")
 # toc()
-
-Sys.setenv(PROJ_LIB = system.file("proj", package = "terra"))
-
-# clim_vars_future <- downscale(
-#   xyz = setDT(coords)[,.(id,lon,lat,elev, BGC)],
-#   #obs_years = 2001:2023,
-#   #gcm_hist_years = 2001:2014,
-#   gcm_ssp_years = 2025:2040,
-#   gcms = list_gcms()[1],
-#   ssps = "ssp245",
-#   max_run = 1,
-#   ensemble_mean = TRUE,
-#   vars = list_vars(set = c("Annual", "Seasonal", "Monthly")),
-#   #vars = c("MAT", "PPT_an", "PAS_an"),
-#   cache = TRUE
-# )
-
-tic()
-clim_vars_future <- downscale(xyz = setDT(coords)[,.(id,lon,lat,elev, BGC)],
-          vars = list_vars(set = c("Annual", "Seasonal", "Monthly")), 
-          return_refperiod = FALSE, 
-          ensemble_mean = FALSE,
-          gcms = c("ACCESS-ESM1-5","CNRM-ESM2-1", "EC-Earth3", "GFDL-ESM4", "GISS-E2-1-G", "MIROC6",  "MPI-ESM1-2-HR", "MRI-ESM2-0" ),
-          ssps = c("ssp245", "ssp370", "ssp585"),           
-          gcm_ssp_years = c(2025:2045),
-          #run_nm = list_runs_ssp(gcm = list_gcms(), ssp = list_ssps()[2]),#[12][2]
-          max_run = 3,
-          #gcm_periods = list_gcm_periods()[2],
-          
-          db_option = "local",
-          cache=TRUE
-          )
-toc()
+# 
+# Sys.setenv(PROJ_LIB = system.file("proj", package = "terra"))
+# 
+# # clim_vars_future <- downscale(
+# #   xyz = setDT(coords)[,.(id,lon,lat,elev, BGC)],
+# #   #obs_years = 2001:2023,
+# #   #gcm_hist_years = 2001:2014,
+# #   gcm_ssp_years = 2025:2040,
+# #   gcms = list_gcms()[1],
+# #   ssps = "ssp245",
+# #   max_run = 1,
+# #   ensemble_mean = TRUE,
+# #   vars = list_vars(set = c("Annual", "Seasonal", "Monthly")),
+# #   #vars = c("MAT", "PPT_an", "PAS_an"),
+# #   cache = TRUE
+# # )
+# 
+# tic()
+# clim_vars_future <- downscale(xyz = setDT(coords)[,.(id,lon,lat,elev, BGC)],
+#           vars = list_vars(set = c("Annual", "Seasonal", "Monthly")), 
+#           return_refperiod = FALSE, 
+#           ensemble_mean = FALSE,
+#           gcms = c("ACCESS-ESM1-5","CNRM-ESM2-1", "EC-Earth3", "GFDL-ESM4", "GISS-E2-1-G", "MIROC6",  "MPI-ESM1-2-HR", "MRI-ESM2-0" ),
+#           ssps = c("ssp245", "ssp370", "ssp585"),           
+#           gcm_ssp_years = c(2025:2045),
+#           #run_nm = list_runs_ssp(gcm = list_gcms(), ssp = list_ssps()[2]),#[12][2]
+#           max_run = 3,
+#           #gcm_periods = list_gcm_periods()[2],
+#           
+#           db_option = "local",
+#           cache=TRUE
+#           )
+# toc()
 # 
 # clim_vars_future2 <- left_join(clim_vars_future, coords.bgc, by = c("id")) %>%
 #   dplyr::select(id, BGC, lon,lat,elev, PERIOD, everything())
 
 ##convert to data.table if needed
-tic()
-setDT(clim_vars_future)
-setDT(coords.bgc)
-
-clim_vars_future3 <- 
-  coords.bgc[clim_vars_future, on = "id"][
-    , c("id", "BGC", "lon", "lat", "elev", "PERIOD",
-        setdiff(names(.SD), c("id","BGC","lon","lat","elev","PERIOD"))),
-    .SDcols = names(.SD)
-  ]
-toc()
-
-
-fwrite(clim_vars_future2, "./climr_data/clim_vars_futures_2025_2045.csv")
+# tic()
+# setDT(clim_vars_future)
+# setDT(coords.bgc)
+# 
+# clim_vars_future3 <- 
+#   coords.bgc[clim_vars_future, on = "id"][
+#     , c("id", "BGC", "lon", "lat", "elev", "PERIOD",
+#         setdiff(names(.SD), c("id","BGC","lon","lat","elev","PERIOD"))),
+#     .SDcols = names(.SD)
+#   ]
+# toc()
+# 
+# 
+# fwrite(clim_vars_future2, "./climr_data/clim_vars_futures_2025_2045.csv")
 
 # tic()
 # clim_vars_future_worst<- downscale(xyz = setDT(coords)[,.(id,lon,lat,elev, BGC)],
@@ -232,25 +243,27 @@ fwrite(clim_vars_future2, "./climr_data/clim_vars_futures_2025_2045.csv")
 ```{r}
 clim_vars2 <- fread("./inputs/WNA_BGC_climr.csv")
 # ggplot boxplot of CMD by BGC for each PERIOD
-climate_vars <- clim_vars2 %>% dplyr::select(BGC, PERIOD, CMD) %>% filter(startsWith(BGC, "SB"), PERIOD %in% c("1961_1990", "2001_2020", "2021")) %>%
+climate_vars <- clim_vars2 %>% dplyr::select(BGC, PERIOD, CMD_an) %>% filter(startsWith(BGC, "BG"), PERIOD %in% c("1961_1990", "2001_2020", "2021")) %>%
   mutate(PERIOD = factor(PERIOD, levels = c("1961_1990","2001_2020", "2021"))) %>%
   mutate(BGC = factor(BGC, levels = unique(BGC)))
 
-ggplot(climate_vars, aes(x = BGC, y = CMD, fill = PERIOD)) +
+ggplot(climate_vars, aes(x = BGC, y = CMD_an, fill = PERIOD)) +
   geom_boxplot(position = position_dodge(width = 0.8)) +
   theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
   labs(title = "", x = "BGC", y = "CMD")
 
 # compare mean difference in CMD between 2001-2020 periods and 2021
- climate_vars %>% 
-  group_by(BGC, PERIOD) %>% 
-  summarise(mean_CMD = mean(CMD, na.rm = TRUE)) %>% 
-  pivot_wider(names_from = PERIOD, values_from = mean_CMD) %>% 
-  mutate(Difference = `2021` - `2001_2020`) %>% ungroup %>% 
-  arrange(desc(Difference)) %>% summarize(mean.diff = mean(Difference))
-ggsave("./outputs/CMD_comparison_boxplot_droughtprone.png", width = 10, height = 6, dpi = 300)
+#  climate_vars %>% 
+#   group_by(BGC, PERIOD) %>% 
+#   summarise(mean_CMD = mean(CMD_an, na.rm = TRUE)) %>% 
+#   pivot_wider(names_from = PERIOD, values_from = mean_CMD) %>% 
+#   mutate(Difference = `2021` - `2001_2020`) %>% ungroup %>% 
+#   arrange(desc(Difference)) %>% summarize(mean.diff = mean(Difference))
+# ggsave("./outputs/CMD_comparison_boxplot_droughtprone.png", width = 10, height = 6, dpi = 300)
 
 ```
+
+
 ```{r}
 clim_vars2 <- fread("./inputs/WNA_BGC_climr.csv")
 # ggplot boxplot of CMD by BGC for each PERIOD
